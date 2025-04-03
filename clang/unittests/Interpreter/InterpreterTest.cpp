@@ -116,6 +116,20 @@ TEST_F(InterpreterTest, Errors) {
   EXPECT_TRUE(!!RecoverErr);
 }
 
+// A death test if the the user has PTUs that are not offloaded to the JIT
+TEST_F(InterpreterTest, UnexecutedCode) {
+#if defined(NDEBUG) || !GTEST_HAS_DEATH_TEST
+  GTEST_SKIP() << "This death test is only available for debug builds.";
+#endif
+  std::vector<const char *> Args;
+  std::unique_ptr<Interpreter> Interp = createInterpreter(Args);
+
+  using PTU = PartialTranslationUnit;
+  
+  PTU &R2(llvm::cantFail(Interp->Parse("int a = 5;")));
+  EXPECT_DEATH(Interp->ParseAndExecute("int b = a + 5;"), "Existing parsed code not executed");
+}
+
 // Here we test whether the user can mix declarations and statements. The
 // interpreter should be smart enough to recognize the declarations from the
 // statements and wrap the latter into a declaration, producing valid code.

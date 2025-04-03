@@ -463,6 +463,10 @@ Interpreter::create(std::unique_ptr<CompilerInstance> CI) {
   auto PTU = Interp->Parse(Runtimes);
   if (!PTU)
     return PTU.takeError();
+
+  if (llvm::Error Err = Interp->Execute(*PTU))
+    return Err;
+
   Interp->markUserCodeStart();
 
   Interp->ValuePrintingInfo.resize(4);
@@ -640,6 +644,11 @@ llvm::Error Interpreter::Execute(PartialTranslationUnit &T) {
 
   if (auto Err = IncrExecutor->runCtors())
     return Err;
+  
+#ifndef NDEBUG
+  for (auto& PTU : IncrParser->getPTUs())
+    assert(!PTU.TheModule && "Existing PTU not sent to JIT before calling execute (code declared but not executed)");
+#endif
 
   return llvm::Error::success();
 }

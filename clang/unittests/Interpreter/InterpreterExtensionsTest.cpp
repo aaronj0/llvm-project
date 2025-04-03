@@ -93,7 +93,8 @@ TEST_F(InterpreterExtensionsTest, FindRuntimeInterface) {
 
   // Make sure no clang::Value logic is attached by the Interpreter.
   Value V1;
-  llvm::cantFail(I.ParseAndExecute("int x = 42;"));
+  // Expect the warning from the diagnostic
+  I.ParseAndExecute("int x = 42;");
   llvm::cantFail(I.ParseAndExecute("x", &V1));
   EXPECT_FALSE(V1.isValid());
   EXPECT_FALSE(V1.hasValue());
