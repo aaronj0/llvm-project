@@ -362,6 +362,32 @@ public:
   }
 };
 
+// These better to put in a runtime header but we can't. This is because we
+// can't find the precise resource directory in unittests so we have to hard
+// code them.
+const char *const Runtimes = R"(
+  #define __CLANG_REPL__ 1
+#ifdef __cplusplus
+  #define EXTERN_C extern "C"
+  void *__clang_Interpreter_SetValueWithAlloc(void*, void*, void*);
+  struct __clang_Interpreter_NewTag{} __ci_newtag;
+  void* operator new(__SIZE_TYPE__, void* __p, __clang_Interpreter_NewTag) noexcept;
+  template <class T, class = T (*)() /*disable for arrays*/>
+  void __clang_Interpreter_SetValueCopyArr(T* Src, void* Placement, unsigned long Size) {
+    for (auto Idx = 0; Idx < Size; ++Idx)
+      new ((void*)(((T*)Placement) + Idx), __ci_newtag) T(Src[Idx]);
+  }
+  template <class T, unsigned long N>
+  void __clang_Interpreter_SetValueCopyArr(const T (*Src)[N], void* Placement, unsigned long Size) {
+    __clang_Interpreter_SetValueCopyArr(Src[0], Placement, Size);
+  }
+#else
+  #define EXTERN_C extern
+#endif // __cplusplus
+
+EXTERN_C void __clang_Interpreter_SetValueNoAlloc(void *This, void *OutVal, void *OpaqueType, ...);
+)";
+
 Interpreter::Interpreter(std::unique_ptr<CompilerInstance> Instance,
                          llvm::Error &ErrOut,
                          std::unique_ptr<llvm::orc::LLJITBuilder> JITBuilder,
@@ -401,6 +427,13 @@ Interpreter::Interpreter(std::unique_ptr<CompilerInstance> Instance,
     }
   }
 
+  // Add Runtime code
+  auto PTURunTime = Parse(Runtimes);
+  if (!PTURunTime) {
+    ErrOut = joinErrors(std::move(ErrOut), std::move(PTURunTime.takeError()));
+    return;
+  }
+
   // Not all frontends support code-generation, e.g. ast-dump actions don't
   if (getCodeGen()) {
     // Process the PTUs that came from initialization. For example -include will
@@ -424,32 +457,6 @@ Interpreter::~Interpreter() {
   }
 }
 
-// These better to put in a runtime header but we can't. This is because we
-// can't find the precise resource directory in unittests so we have to hard
-// code them.
-const char *const Runtimes = R"(
-    #define __CLANG_REPL__ 1
-#ifdef __cplusplus
-    #define EXTERN_C extern "C"
-    void *__clang_Interpreter_SetValueWithAlloc(void*, void*, void*);
-    struct __clang_Interpreter_NewTag{} __ci_newtag;
-    void* operator new(__SIZE_TYPE__, void* __p, __clang_Interpreter_NewTag) noexcept;
-    template <class T, class = T (*)() /*disable for arrays*/>
-    void __clang_Interpreter_SetValueCopyArr(T* Src, void* Placement, unsigned long Size) {
-      for (auto Idx = 0; Idx < Size; ++Idx)
-        new ((void*)(((T*)Placement) + Idx), __ci_newtag) T(Src[Idx]);
-    }
-    template <class T, unsigned long N>
-    void __clang_Interpreter_SetValueCopyArr(const T (*Src)[N], void* Placement, unsigned long Size) {
-      __clang_Interpreter_SetValueCopyArr(Src[0], Placement, Size);
-    }
-#else
-    #define EXTERN_C extern
-#endif // __cplusplus
-
-  EXTERN_C void __clang_Interpreter_SetValueNoAlloc(void *This, void *OutVal, void *OpaqueType, ...);
-)";
-
 llvm::Expected<std::unique_ptr<Interpreter>>
 Interpreter::create(std::unique_ptr<CompilerInstance> CI) {
   llvm::Error Err = llvm::Error::success();
@@ -458,15 +465,8 @@ Interpreter::create(std::unique_ptr<CompilerInstance> CI) {
   if (Err)
     return std::move(Err);
 
-  // Add runtime code and set a marker to hide it from user code. Undo will not
-  // go through that.
-  auto PTU = Interp->Parse(Runtimes);
-  if (!PTU)
-    return PTU.takeError();
-
-  if (llvm::Error Err = Interp->Execute(*PTU))
-    return Err;
-
+  // Set a marker to hide previous PTUs that came from initialization, such as includes and Runtime.
+  // Undo will not go through that.
   Interp->markUserCodeStart();
 
   Interp->ValuePrintingInfo.resize(4);
@@ -638,18 +638,40 @@ llvm::Error Interpreter::Execute(PartialTranslationUnit &T) {
     if (Err)
       return Err;
   }
+
+  // Here we look for stray PTUs that were never passed to the JIT, i.e. parsed
+  // but not executed. We provide a runtime warning, to prevent JIT session
+  // errors for when a symbol from a previously unexecuted PTU is required to
+  // execute the current one.
+
+  // locate the current PTU T (which we are trying to execute) in the PTUs list.
+  auto T_it = std::find_if(PTUs.begin(), PTUs.end(),
+                           [&](const auto& PTU) {
+                             return PTU.TheModule == T.TheModule;
+                           });
+  // We expect T in the list of PTUs, otherwise this PTU comes from code that was not parsed by the current interpreter instance.
+  assert(T_it != PTUs.end());
+
+  // look for stray PTUs prior to T_it.
+  if (auto it = std::find_if(PTUs.begin(), T_it,
+                             [&](const auto& PTU) {
+                               return PTU.TheModule && (PTU.TheModule != T.TheModule);
+                             });
+      (it != T_it))
+  {
+  return llvm::make_error<llvm::StringError>(
+      "Warning: Existing parsed code not executed, Module: " +
+      it->TheModule->getModuleIdentifier() +
+      ". This can lead to incoherent behavior and JIT session errors.",
+      std::error_code());
+  }
+
   // FIXME: Add a callback to retain the llvm::Module once the JIT is done.
   if (auto Err = IncrExecutor->addModule(T))
     return Err;
 
   if (auto Err = IncrExecutor->runCtors())
     return Err;
-  
-#ifndef NDEBUG
-  for (auto& PTU : IncrParser->getPTUs())
-    assert(!PTU.TheModule && "Existing PTU not sent to JIT before calling execute (code declared but not executed)");
-#endif
-
   return llvm::Error::success();
 }
 
@@ -659,8 +681,11 @@ llvm::Error Interpreter::ParseAndExecute(llvm::StringRef Code, Value *V) {
   if (!PTU)
     return PTU.takeError();
   if (PTU->TheModule)
-    if (llvm::Error Err = Execute(*PTU))
+    if (llvm::Error Err = Execute(*PTU)) {
+      IncrParser->CleanUpPTU(PTU->TUPart);
+      PTUs.pop_back();
       return Err;
+    }
 
   if (LastValue.isValid()) {
     if (!V) {

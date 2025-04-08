@@ -116,18 +116,50 @@ TEST_F(InterpreterTest, Errors) {
   EXPECT_TRUE(!!RecoverErr);
 }
 
-// A death test if the the user has PTUs that are not offloaded to the JIT
+// Test errors raised during incoherent execution
+
 TEST_F(InterpreterTest, UnexecutedCode) {
-#if defined(NDEBUG) || !GTEST_HAS_DEATH_TEST
-  GTEST_SKIP() << "This death test is only available for debug builds.";
-#endif
   std::vector<const char *> Args;
   std::unique_ptr<Interpreter> Interp = createInterpreter(Args);
 
   using PTU = PartialTranslationUnit;
   
-  PTU &R2(llvm::cantFail(Interp->Parse("int a = 5;")));
-  EXPECT_DEATH(Interp->ParseAndExecute("int b = a + 5;"), "Existing parsed code not executed");
+  PTU &R1(llvm::cantFail(Interp->Parse("int a = 5;")));
+  llvm::Error ErrOut = Interp->ParseAndExecute("int b = a + 5;");
+
+  EXPECT_THAT(llvm::toString(std::move(ErrOut)), ::testing::HasSubstr("Existing parsed code not executed"));
+  llvm::cantFail(Interp->Execute(R1));
+  llvm::cantFail(Interp->ParseAndExecute("int b = a + 5;"));
+
+  PTU &R2(llvm::cantFail(Interp->Parse("int x = 1; x")));
+  PTU &R3(llvm::cantFail(Interp->Parse("int y = 2; y")));
+  PTU &R4(llvm::cantFail(Interp->Parse("int z = 3; z")));
+
+  // Expect an error due to translation units that remain unexecuted
+  ErrOut = Interp->ParseAndExecute("int k = 42;");
+  EXPECT_THAT(llvm::toString(std::move(ErrOut)), ::testing::HasSubstr("Existing parsed code not executed"));
+
+  // Execute previously parsed PTUs
+  llvm::cantFail(Interp->Execute(R2));
+  llvm::cantFail(Interp->Execute(R3));
+  llvm::cantFail(Interp->Execute(R4));
+
+  // Test reparsing previously failed ParseAndExecute
+  // The interpreter should allow redeclaring in this case.
+  PTU &R5(llvm::cantFail(Interp->Parse("int k = 42;")));
+  Value V1;
+
+  // Should error out since R5 was not executed
+  ErrOut = Interp->ParseAndExecute("k", &V1);
+  EXPECT_THAT(llvm::toString(std::move(ErrOut)), ::testing::HasSubstr("Existing parsed code not executed"));
+
+  // Execute the missed code for coherency
+  llvm::cantFail(Interp->Execute(R5));
+
+  // Now it should work as expected
+  llvm::cantFail(Interp->ParseAndExecute("k", &V1));
+  EXPECT_TRUE(V1.isValid());
+  EXPECT_TRUE(V1.hasValue());
 }
 
 // Here we test whether the user can mix declarations and statements. The

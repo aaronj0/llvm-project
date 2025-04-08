@@ -86,15 +86,27 @@ TEST_F(InterpreterExtensionsTest, FindRuntimeInterface) {
   std::unique_ptr<ASTConsumer> C = std::make_unique<NoopConsumer>();
   OutOfProcInterpreter I(std::move(CI), ErrOut, std::move(C),
                          /*JITBuilder=*/nullptr);
+  using PTU = PartialTranslationUnit;
+  
   cantFail(std::move(ErrOut));
-  cantFail(I.Parse("int a = 1; a"));
-  cantFail(I.Parse("int b = 2; b"));
-  cantFail(I.Parse("int c = 3; c"));
+  PTU &R1(cantFail(I.Parse("int a = 1; a")));
+  PTU &R2(cantFail(I.Parse("int b = 2; b")));
+  PTU &R3(cantFail(I.Parse("int c = 3; c")));
 
   // Make sure no clang::Value logic is attached by the Interpreter.
   Value V1;
-  // Expect the warning from the diagnostic
-  I.ParseAndExecute("int x = 42;");
+
+  // Expect the error due to stray PTU's which remain unexecuted
+  ErrOut = I.ParseAndExecute("int x = 42;");
+  EXPECT_THAT(llvm::toString(std::move(ErrOut)), ::testing::HasSubstr("Existing parsed code not executed"));
+
+  // Execute previously parsed PTUs
+  llvm::cantFail(I.Execute(R1));
+  llvm::cantFail(I.Execute(R2));
+  llvm::cantFail(I.Execute(R3));
+
+  // Now proceed with executing 
+  llvm::cantFail(I.ParseAndExecute("int x = 42;"));
   llvm::cantFail(I.ParseAndExecute("x", &V1));
   EXPECT_FALSE(V1.isValid());
   EXPECT_FALSE(V1.hasValue());
