@@ -440,8 +440,23 @@ Interpreter::Interpreter(std::unique_ptr<CompilerInstance> Instance,
     // give us a header that's processed at initialization of the preprocessor.
     for (PartialTranslationUnit &PTU : PTUs)
       if (llvm::Error Err = Execute(PTU)) {
-        ErrOut = joinErrors(std::move(ErrOut), std::move(Err));
-        return;
+      Err = llvm::handleErrors(std::move(Err),
+        [this, &PTU](InterpExecutionError &IEE) -> llvm::Error {
+          if (IEE.HasJitSessionError) {
+            IncrParser->CleanUpPTU(PTU.TUPart);
+            PTUs.pop_back();
+            return std::move(llvm::make_error<InterpExecutionError>(IEE));
+          }
+
+          if(IEE.HasPTUConsistency) {
+            return std::move(llvm::make_error<llvm::StringError>(IEE.PTUConsistencyMsg,
+                                            std::error_code()));
+          }
+          return llvm::Error::success();
+        });
+      
+      ErrOut = joinErrors(std::move(ErrOut), std::move(Err));
+      return;
       }
   }
 }
@@ -639,12 +654,13 @@ llvm::Error Interpreter::Execute(PartialTranslationUnit &T) {
       return Err;
   }
 
+  InterpExecutionError AccumulatedDiag;
   // Here we look for stray PTUs that were never passed to the JIT, i.e. parsed
   // but not executed. We provide a runtime warning, to prevent JIT session
   // errors for when a symbol from a previously unexecuted PTU is required to
   // execute the current one.
 
-  // locate the current PTU T (which we are trying to execute) in the PTUs list.
+  // Locate the current PTU T (which we are trying to execute) in the PTUs list.
   auto T_it = std::find_if(PTUs.begin(), PTUs.end(),
                            [&](const auto& PTU) {
                              return PTU.TheModule == T.TheModule;
@@ -653,25 +669,40 @@ llvm::Error Interpreter::Execute(PartialTranslationUnit &T) {
   assert(T_it != PTUs.end());
 
   // look for stray PTUs prior to T_it.
+  // FIXME optimise this search, ideally make PTUs a llvm::Setvector
   if (auto it = std::find_if(PTUs.begin(), T_it,
                              [&](const auto& PTU) {
                                return PTU.TheModule && (PTU.TheModule != T.TheModule);
                              });
       (it != T_it))
   {
-  return llvm::make_error<llvm::StringError>(
-      "Warning: Existing parsed code not executed, Module: " +
-      it->TheModule->getModuleIdentifier() +
-      ". This can lead to incoherent behavior and JIT session errors.",
-      std::error_code());
+  // TODO : don't return here, store this diagnostic on our custom class and later join if AddModule fails
+  AccumulatedDiag.addPTUConsistency(it->TheModule->getModuleIdentifier());
+  // return llvm::make_error<llvm::StringError>(
+  //     "Warning: Existing parsed code not executed, Module: " +
+  //     it->TheModule->getModuleIdentifier() +
+  //     ". This can lead to incoherent behavior and JIT session errors.",
+  //     std::error_code());
   }
 
+  // Add custom error class that has a warning
+  // During the cleanup check if the error was the custom class, and if so don't cleanup
+  // If it was an 
+
   // FIXME: Add a callback to retain the llvm::Module once the JIT is done.
-  if (auto Err = IncrExecutor->addModule(T))
-    return Err;
+  if (auto Err = IncrExecutor->addModule(T)) {
+    // accumulate  this information into the custom error class i
+    AccumulatedDiag.addJitSessionError(llvm::toString(std::move(Err)));
+  }
 
   if (auto Err = IncrExecutor->runCtors())
-    return Err;
+    AccumulatedDiag.addJitSessionError(llvm::toString(std::move(Err)));
+  // If success 
+  // return PTUConstitency and in ParseAndExecute determine cleanup based on whether AddModule failed
+  
+  if (AccumulatedDiag.HasJitSessionError || AccumulatedDiag.HasPTUConsistency)
+    return llvm::make_error<InterpExecutionError>(AccumulatedDiag);
+
   return llvm::Error::success();
 }
 
@@ -680,12 +711,41 @@ llvm::Error Interpreter::ParseAndExecute(llvm::StringRef Code, Value *V) {
   auto PTU = Parse(Code);
   if (!PTU)
     return PTU.takeError();
-  if (PTU->TheModule)
-    if (llvm::Error Err = Execute(*PTU)) {
-      IncrParser->CleanUpPTU(PTU->TUPart);
-      PTUs.pop_back();
-      return Err;
+  if (PTU->TheModule) {
+    // Here the cleanup should be determined based on whether a JIT session error occured (PTUConsistency + JitSessionError)
+    // And if only PTUConsistency, don't cleanup
+    if(llvm::Error Err = Execute(*PTU)) {
+      // check if PTU inconsistency, if so, warn and continue
+
+      // check if both: then aggregate messages
+      // return Err;
+      // if JIT session error: cleanup
+  // static std::optional<PartialDiagnosticAt> take(llvm::Error &Err) {
+  //   std::optional<PartialDiagnosticAt> Result;
+  //   Err = llvm::handleErrors(std::move(Err), [&](DiagnosticError &E) {
+  //     Result = std::move(E.getDiagnostic());
+  //   });
+  //   return Result;
+  // }
+      Err = llvm::handleErrors(std::move(Err),
+        [this, &PTU](InterpExecutionError &IEE) -> llvm::Error {
+          if (IEE.HasJitSessionError) {
+            IncrParser->CleanUpPTU(PTU->TUPart);
+            PTUs.pop_back();
+            return llvm::make_error<InterpExecutionError>(IEE);
+          }
+
+          if(IEE.HasPTUConsistency) {
+            return llvm::make_error<llvm::StringError>(IEE.PTUConsistencyMsg,
+                                            std::error_code());
+          }
+
+          return llvm::Error::success();
+        });
+
+      if(Err) return Err;
     }
+  }
 
   if (LastValue.isValid()) {
     if (!V) {

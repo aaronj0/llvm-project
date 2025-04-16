@@ -50,4 +50,34 @@ NamedDecl *LookupNamed(Sema &S, llvm::StringRef Name,
 std::string GetFullTypeName(ASTContext &Ctx, QualType QT);
 } // namespace clang
 
+/// Custom error class for interpreter execution diagnostics.
+class InterpExecutionError : public llvm::ErrorInfo<InterpExecutionError> {
+public:
+    // Unique identifier for the error class.
+    static char ID;
+
+    // Diagnostic flags.
+    bool HasPTUConsistency;   // Non-fatal warning flag.
+    bool HasJitSessionError;  // Fatal error flag.
+
+    // Accumulated diagnostic messages.
+    std::string PTUConsistencyMsg;
+    std::string JitSessionErrorMsg;
+
+    /// Default constructor.
+    InterpExecutionError();
+
+    /// Method to accumulate a PTU consistency (warning) diagnostic.
+    void addPTUConsistency(llvm::StringRef ModuleID);
+
+    /// Method to accumulate a JIT session error diagnostic.
+    void addJitSessionError(llvm::StringRef ErrMsg);
+
+    /// Log the error diagnostics.
+    void log(llvm::raw_ostream &OS) const override;
+
+    /// Convert error info to a standard error code.
+    std::error_code convertToErrorCode() const override;
+};
+
 #endif

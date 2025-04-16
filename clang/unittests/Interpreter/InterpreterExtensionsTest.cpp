@@ -98,6 +98,7 @@ TEST_F(InterpreterExtensionsTest, FindRuntimeInterface) {
 
   // Expect the error due to stray PTU's which remain unexecuted
   ErrOut = I.ParseAndExecute("int x = 42;");
+  // I.ParseAndExecute("void f(); f();") is a good example
   EXPECT_THAT(llvm::toString(std::move(ErrOut)), ::testing::HasSubstr("Existing parsed code not executed"));
 
   // Execute previously parsed PTUs

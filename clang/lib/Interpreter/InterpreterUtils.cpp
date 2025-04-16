@@ -109,3 +109,34 @@ std::string GetFullTypeName(ASTContext &Ctx, QualType QT) {
   return QT.getAsString(Policy);
 }
 } // namespace clang
+
+
+// Definition of the static member.
+char InterpExecutionError::ID = 0;
+
+InterpExecutionError::InterpExecutionError()
+  : HasPTUConsistency(false), HasJitSessionError(false) { }
+
+void InterpExecutionError::addPTUConsistency(llvm::StringRef ModuleID) {
+  HasPTUConsistency = true;
+  PTUConsistencyMsg = "Warning: Existing parsed code not executed, Module: " +
+                      ModuleID.str() +
+                      ". This can lead to incoherent behavior and JIT session errors.";
+}
+
+void InterpExecutionError::addJitSessionError(llvm::StringRef ErrMsg) {
+  HasJitSessionError = true;
+  JitSessionErrorMsg += ErrMsg.str();
+}
+
+void InterpExecutionError::log(llvm::raw_ostream &OS) const {
+  if (HasPTUConsistency)
+    OS << PTUConsistencyMsg << "\n";
+  if (HasJitSessionError)
+    OS << "JIT Session error: " << JitSessionErrorMsg;
+}
+
+std::error_code InterpExecutionError::convertToErrorCode() const {
+  // Here you can return a specific error code or a generic one.
+  return make_error_code(std::errc::invalid_argument);
+}
