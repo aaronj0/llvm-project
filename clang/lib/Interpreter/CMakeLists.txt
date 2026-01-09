@@ -1,6 +1,8 @@
 set(LLVM_LINK_COMPONENTS
    core
    native
+   ExecutionEngine
+   MCJIT
    MC
    Option
    OrcJit

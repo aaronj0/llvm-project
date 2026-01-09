@@ -22,6 +22,9 @@
 
 namespace llvm {
 class Error;
+class ExecutionEngine;
+class EngineBuilder;
+class TargetMachine;
 namespace orc {
 class JITTargetMachineBuilder;
 class LLJIT;
@@ -64,6 +67,25 @@ public:
 
   static llvm::Expected<std::unique_ptr<llvm::orc::LLJITBuilder>>
   createDefaultJITBuilder(llvm::orc::JITTargetMachineBuilder JTMB);
+};
+
+class MCJITIncrementalExecutor : public IncrementalExecutor {
+public:
+  std::unique_ptr<llvm::ExecutionEngine> EE;
+  
+  MCJITIncrementalExecutor(llvm::orc::ThreadSafeContext &TSC,
+                           llvm::TargetMachine *TM,
+                           llvm::Error &Err,
+                           llvm::EngineBuilder* JITBuilder);
+  
+  llvm::Error addModule(PartialTranslationUnit &PTU) override;
+  llvm::Error runCtors() const override;
+  llvm::Error cleanUp() override;
+  llvm::Expected<llvm::orc::ExecutorAddr>
+  getSymbolAddress(llvm::StringRef Name,
+                SymbolNameKind NameKind) const override;
+  llvm::ExecutionEngine &GetExecutionEngine() { return *EE.get(); }
+  ~MCJITIncrementalExecutor() override;
 };
 
 } // end namespace clang

@@ -19,6 +19,7 @@
 #include "clang/Interpreter/Value.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/ExecutionEngine/JITSymbol.h"
 #include "llvm/ExecutionEngine/Orc/Shared/ExecutorAddress.h"
 #include "llvm/Support/Error.h"
@@ -26,6 +27,7 @@
 #include <vector>
 
 namespace llvm {
+class TargetMachine;
 namespace orc {
 class LLJIT;
 class LLJITBuilder;
@@ -40,6 +42,7 @@ class CodeGenerator;
 class CXXRecordDecl;
 class Decl;
 class IncrementalExecutor;
+class MCJITIncrementalExecutor;
 class IncrementalParser;
 class IncrementalCUDADeviceParser;
 
@@ -91,7 +94,7 @@ class Interpreter {
   /// Long-lived, incremental parsing action.
   std::unique_ptr<IncrementalAction> Act;
   std::unique_ptr<IncrementalParser> IncrParser;
-  std::unique_ptr<IncrementalExecutor> IncrExecutor;
+  std::unique_ptr<MCJITIncrementalExecutor> IncrExecutor;
 
   // An optional parser for CUDA offloading
   std::unique_ptr<IncrementalCUDADeviceParser> DeviceParser;
@@ -122,7 +125,7 @@ class Interpreter {
 protected:
   // Derived classes can use an extended interface of the Interpreter.
   Interpreter(std::unique_ptr<CompilerInstance> Instance, llvm::Error &Err,
-              std::unique_ptr<llvm::orc::LLJITBuilder> JITBuilder = nullptr,
+              std::unique_ptr<llvm::EngineBuilder> JITBuilder = nullptr,
               std::unique_ptr<clang::ASTConsumer> Consumer = nullptr);
 
   // Create the internal IncrementalExecutor, or re-create it after calling
@@ -136,7 +139,7 @@ protected:
 public:
   virtual ~Interpreter();
   static llvm::Expected<std::unique_ptr<Interpreter>>
-  create(std::unique_ptr<CompilerInstance> CI);
+  create(std::unique_ptr<CompilerInstance> CI, std::unique_ptr<llvm::EngineBuilder> JITBuilder = nullptr);
   static llvm::Expected<std::unique_ptr<Interpreter>>
   createWithCUDA(std::unique_ptr<CompilerInstance> CI,
                  std::unique_ptr<CompilerInstance> DCI);
@@ -144,7 +147,7 @@ public:
   ASTContext &getASTContext();
   const CompilerInstance *getCompilerInstance() const;
   CompilerInstance *getCompilerInstance();
-  llvm::Expected<llvm::orc::LLJIT &> getExecutionEngine();
+  llvm::Expected<llvm::ExecutionEngine &> getExecutionEngine();
 
   llvm::Expected<PartialTranslationUnit &> Parse(llvm::StringRef Code);
   llvm::Error Execute(PartialTranslationUnit &T);
@@ -194,7 +197,8 @@ private:
 
   llvm::SmallVector<Expr *, 4> ValuePrintingInfo;
 
-  std::unique_ptr<llvm::orc::LLJITBuilder> JITBuilder;
+  std::unique_ptr<llvm::EngineBuilder> JITBuilder;
+  std::unique_ptr<llvm::TargetMachine> m_TM;
 };
 } // namespace clang
 

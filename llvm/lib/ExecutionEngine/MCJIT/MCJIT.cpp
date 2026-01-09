@@ -27,6 +27,8 @@
 #include "llvm/Support/SmallVectorMemoryBuffer.h"
 #include <mutex>
 
+#include <iostream>
+
 using namespace llvm;
 
 namespace {
@@ -167,6 +169,11 @@ std::unique_ptr<MemoryBuffer> MCJIT::emitObject(Module *M) {
     report_fatal_error("Target does not support MC emission!");
 
   // Initialize passes.
+  std::cout<<"Running passes for Module"<< M->getModuleIdentifier() <<"\n";
+  // if (M->getModuleIdentifier() == "sum_squares_cpp")
+  // {
+  //   // LLVMLinkModules2(M, M);
+  // }
   PM.run(*M);
   // Flush the output buffer to get the generated code into memory
 

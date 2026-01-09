@@ -22,6 +22,7 @@
 #include <cstring>
 #include <optional>
 
+#include <iostream>
 using namespace llvm;
 
 #define DEBUG_TYPE "jit"
@@ -254,6 +255,9 @@ void LLVMFreeMachineCodeForFunction(LLVMExecutionEngineRef EE, LLVMValueRef F) {
 }
 
 void LLVMAddModule(LLVMExecutionEngineRef EE, LLVMModuleRef M){
+  std::cout<< "\n[LLVMAddModule] Adding module address: " << reinterpret_cast<uintptr_t>(M) << "\n";
+  std::cout<< "\nIR of module being added:\n";
+  unwrap(M)->print(llvm::outs(), nullptr);
   unwrap(EE)->addModule(std::unique_ptr<Module>(unwrap(M)));
 }
 

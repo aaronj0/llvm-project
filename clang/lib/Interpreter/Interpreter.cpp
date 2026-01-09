@@ -364,7 +364,7 @@ public:
 
 Interpreter::Interpreter(std::unique_ptr<CompilerInstance> Instance,
                          llvm::Error &ErrOut,
-                         std::unique_ptr<llvm::orc::LLJITBuilder> JITBuilder,
+                         std::unique_ptr<llvm::EngineBuilder> JITBuilder,
                          std::unique_ptr<clang::ASTConsumer> Consumer)
     : JITBuilder(std::move(JITBuilder)) {
   CI = std::move(Instance);
@@ -455,10 +455,11 @@ const char *const Runtimes = R"(
 )";
 
 llvm::Expected<std::unique_ptr<Interpreter>>
-Interpreter::create(std::unique_ptr<CompilerInstance> CI) {
+Interpreter::create(std::unique_ptr<CompilerInstance> CI,
+                    std::unique_ptr<llvm::EngineBuilder> JITBuilder) {
   llvm::Error Err = llvm::Error::success();
   auto Interp =
-      std::unique_ptr<Interpreter>(new Interpreter(std::move(CI), Err));
+      std::unique_ptr<Interpreter>(new Interpreter(std::move(CI), Err, std::move(JITBuilder)));
   if (Err)
     return std::move(Err);
 
@@ -524,7 +525,7 @@ const CompilerInstance *Interpreter::getCompilerInstance() const {
 
 CompilerInstance *Interpreter::getCompilerInstance() { return CI.get(); }
 
-llvm::Expected<llvm::orc::LLJIT &> Interpreter::getExecutionEngine() {
+llvm::Expected<llvm::ExecutionEngine &> Interpreter::getExecutionEngine() {
   if (!IncrExecutor) {
     if (auto Err = CreateExecutor())
       return std::move(Err);
@@ -626,23 +627,36 @@ llvm::Error Interpreter::CreateExecutor() {
     return llvm::make_error<llvm::StringError>("Operation failed. "
                                                "No code generator available",
                                                std::error_code());
-  if (!JITBuilder) {
-    const std::string &TT = getCompilerInstance()->getTargetOpts().Triple;
-    auto JTMB = createJITTargetMachineBuilder(TT);
-    if (!JTMB)
+  // if (!JITBuilder) {
+  //   const std::string &TT = getCompilerInstance()->getTargetOpts().Triple;
+  //   auto JTMB = createJITTargetMachineBuilder(TT);
+  //   if (!JTMB)
+  //     return JTMB.takeError();
+  //   auto TM = JTMB->createTargetMachine();
+  //   if (!TM)
+  //     return TM.takeError();
+  //   m_TM = std::move(*TM);
+  //   auto JB = IncrementalExecutor::createDefaultJITBuilder(std::move(*JTMB));
+  //   if (!JB)
+  //     return JB.takeError();
+  //   JITBuilder = std::move(*JB);
+  // }
+  
+  const std::string &TT = getCompilerInstance()->getTargetOpts().Triple;
+  auto JTMB = createJITTargetMachineBuilder(TT);
+  if (!JTMB)
       return JTMB.takeError();
-    auto JB = IncrementalExecutor::createDefaultJITBuilder(std::move(*JTMB));
-    if (!JB)
-      return JB.takeError();
-    JITBuilder = std::move(*JB);
-  }
+  auto TM = JTMB->createTargetMachine();
+  if (!TM)
+      return TM.takeError();
+  m_TM = std::move(*TM);
 
   llvm::Error Err = llvm::Error::success();
 #ifdef __EMSCRIPTEN__
   auto Executor = std::make_unique<WasmIncrementalExecutor>(*TSCtx);
 #else
   auto Executor =
-      std::make_unique<IncrementalExecutor>(*TSCtx, *JITBuilder, Err);
+      std::make_unique<MCJITIncrementalExecutor>(*TSCtx, m_TM.release(), Err, JITBuilder.release());
 #endif
   if (!Err)
     IncrExecutor = std::move(Executor);
@@ -753,17 +767,13 @@ llvm::Error Interpreter::LoadDynamicLibrary(const char *name) {
                                                llvm::inconvertibleErrorCode());
   }
 #else
-  auto EE = getExecutionEngine();
-  if (!EE)
-    return EE.takeError();
-
-  auto &DL = EE->getDataLayout();
-
-  if (auto DLSG = llvm::orc::DynamicLibrarySearchGenerator::Load(
-          name, DL.getGlobalPrefix()))
-    EE->getMainJITDylib().addGenerator(std::move(*DLSG));
-  else
-    return DLSG.takeError();
+  // MCJIT uses sys::DynamicLibrary for external symbol resolution
+  std::string errMsg;
+  if (llvm::sys::DynamicLibrary::LoadLibraryPermanently(name, &errMsg)) {
+    return llvm::make_error<llvm::StringError>(
+        "Failed to load dynamic library '" + std::string(name) + "': " + errMsg,
+        llvm::inconvertibleErrorCode());
+  }
 #endif
 
   return llvm::Error::success();

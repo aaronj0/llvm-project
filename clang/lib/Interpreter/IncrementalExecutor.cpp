@@ -16,6 +16,8 @@
 #include "clang/Basic/TargetOptions.h"
 #include "clang/Interpreter/PartialTranslationUnit.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
+#include "llvm/ExecutionEngine/MCJIT.h"
+#include "llvm/ExecutionEngine/RTDyldMemoryManager.h"
 #include "llvm/ExecutionEngine/Orc/CompileUtils.h"
 #include "llvm/ExecutionEngine/Orc/Debugging/DebuggerSupport.h"
 #include "llvm/ExecutionEngine/Orc/ExecutionUtils.h"
@@ -29,6 +31,7 @@
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/TargetSelect.h"
 
+#include <iostream>
 // Force linking some of the runtimes that helps attaching to a debugger.
 LLVM_ATTRIBUTE_USED void linkComponents() {
   llvm::errs() << (void *)&llvm_orc_registerJITLoaderGDBWrapper
@@ -118,4 +121,111 @@ IncrementalExecutor::getSymbolAddress(llvm::StringRef Name,
   return SymOrErr->getAddress();
 }
 
+
+// MCJIT implementation
+MCJITIncrementalExecutor::MCJITIncrementalExecutor(
+                                         llvm::orc::ThreadSafeContext &TSC,
+                                         llvm::TargetMachine *TM,
+                                         llvm::Error &Err,
+                                         llvm::EngineBuilder* JITBuilder)
+    : IncrementalExecutor(TSC) {
+  
+  llvm::ErrorAsOutParameter EAO(&Err);
+  
+  llvm::InitializeNativeTarget();
+  llvm::InitializeNativeTargetAsmPrinter();
+  llvm::InitializeNativeTargetAsmParser();
+
+  auto Context = TSC.getContext();
+  auto M = std::make_unique<llvm::Module>("__mcjit_module", *Context);
+  
+  llvm::EngineBuilder EB(std::move(M));
+  std::string err;
+  EB.setErrorStr(&err);
+  EB.setEngineKind(llvm::EngineKind::JIT);
+  
+  if(JITBuilder)
+    std::cout<<"Using custom JITBuilder\n";
+
+  llvm::ExecutionEngine *engine = JITBuilder ?
+      JITBuilder->create(TM) :
+      EB.create(TM);
+  EE.reset(engine);
+  
+  if (!EE) {
+    Err = llvm::make_error<llvm::StringError>(
+        "Failed to create ExecutionEngine: " + err, 
+        llvm::inconvertibleErrorCode());
+    return;
+  }
+}
+
+llvm::Error MCJITIncrementalExecutor::addModule(PartialTranslationUnit &PTU) {
+  std::cout << "[MCJITIncrementalExecutor::addModule] Adding module: " << PTU.TheModule.get() << "module name" << " moduleName: " << PTU.TheModule->getName().data()  << "\n";  
+  std::cout << "\nIR of module being added:\n";
+  PTU.TheModule->print(llvm::outs(), nullptr);
+  EE->addModule(std::move(PTU.TheModule));
+  return llvm::Error::success();
+}
+  // llvm::Error removeModule(PartialTranslationUnit &PTU) override;
+  llvm::Error MCJITIncrementalExecutor::runCtors() const {
+  EE->finalizeObject();
+  EE->runStaticConstructorsDestructors(false);
+  return llvm::Error::success();
+  }
+  // llvm::Error cleanUp() override;
+  // llvm::Expected<llvm::orc::ExecutorAddr>
+  // getSymbolAddress(llvm::StringRef Name,
+  //                  SymbolNameKind NameKind) const override;
+
+
+  llvm::Expected<llvm::orc::ExecutorAddr>
+MCJITIncrementalExecutor::getSymbolAddress(llvm::StringRef Name,
+                                          SymbolNameKind NameKind) const {
+  
+  std::string SymbolName = Name.str();
+                                          
+  if (NameKind == IRName) {
+    // MCJIT uses the linker names directly.
+    // For simplicity, we assume that all names are not mangled.
+    // In a complete implementation, we would need to mangle the name
+    // according to the target platform's ABI.
+  }
+
+
+
+  // auto *MCJITEngine = static_cast<llvm::MCJIT*>(EE.get());
+  
+  
+  // Try to find the symbol in external libraries/process first
+  uint64_t Addr = llvm::RTDyldMemoryManager::getSymbolAddressInProcess(SymbolName);
+  if (Addr)
+    return llvm::orc::ExecutorAddr(Addr);
+
+  // Cast away const since ExecutionEngine methods aren't const
+  auto *NonConstEE = const_cast<llvm::ExecutionEngine*>(EE.get());
+
+  // Try as a function in JIT'd modules
+  Addr = NonConstEE->getFunctionAddress(SymbolName);
+  if (Addr)
+    return llvm::orc::ExecutorAddr(Addr);
+
+  // Try as a global variable in JIT'd modules  
+  Addr = NonConstEE->getGlobalValueAddress(SymbolName);
+  if (Addr)
+    return llvm::orc::ExecutorAddr(Addr);
+
+  return llvm::make_error<llvm::StringError>(
+      "Symbol not found: " + SymbolName,
+      llvm::inconvertibleErrorCode());
+
+
+  // dlsym via llvm::sys::DynamicLibrary since we don't have the MemoryManager
+}
+
+llvm::Error MCJITIncrementalExecutor::cleanUp() {
+  return llvm::Error::success();
+}
+
+  MCJITIncrementalExecutor::~MCJITIncrementalExecutor() = default;
 } // namespace clang
