@@ -511,6 +511,8 @@ Interpreter::createWithCUDA(std::unique_ptr<CompilerInstance> CI,
 
   DCI->ExecuteAction(*Interp->DeviceAct);
 
+  Interp->GenModule(Interp->DeviceAct.get());
+
   Interp->DeviceCI = std::move(DCI);
 
   auto DeviceParser = std::make_unique<IncrementalCUDADeviceParser>(
