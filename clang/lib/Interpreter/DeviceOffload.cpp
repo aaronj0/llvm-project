@@ -17,9 +17,13 @@
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Interpreter/PartialTranslationUnit.h"
 
+#include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Linker/Linker.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Target/TargetMachine.h"
 
 namespace clang {
@@ -56,6 +60,40 @@ llvm::Expected<llvm::StringRef> IncrementalCUDADeviceParser::GeneratePTX() {
       PTU.TheModule->getTargetTriple(), TargetOpts.CPU, "", TO,
       llvm::Reloc::Model::PIC_);
   PTU.TheModule->setDataLayout(TargetMachine->createDataLayout());
+
+  // candidates for libdevice
+  {
+    static constexpr const char *kLibdeviceCandidates[] = {
+        "/usr/local/cuda-12.9/nvvm/libdevice/libdevice.10.bc",
+        "/usr/local/cuda-13.1/nvvm/libdevice/libdevice.10.bc",
+        "/usr/local/cuda/nvvm/libdevice/libdevice.10.bc",
+    };
+    for (const char *P : kLibdeviceCandidates) {
+      if (!llvm::sys::fs::exists(P))
+        continue;
+      auto BufOrErr = llvm::MemoryBuffer::getFile(P);
+      if (!BufOrErr)
+        continue;
+      auto ModOrErr = llvm::parseBitcodeFile(BufOrErr->get()->getMemBufferRef(),
+                                             PTU.TheModule->getContext());
+      if (!ModOrErr) {
+        llvm::consumeError(ModOrErr.takeError());
+        continue;
+      }
+      // Align target triple/data layout with the host module so the
+      // linker doesn't complain.
+      (*ModOrErr)->setTargetTriple(PTU.TheModule->getTargetTriple());
+      (*ModOrErr)->setDataLayout(PTU.TheModule->getDataLayout());
+      llvm::Linker Linker(*PTU.TheModule);
+      // only pull in the libdevice functions actually referenced
+      if (Linker.linkInModule(std::move(*ModOrErr),
+                              llvm::Linker::Flags::LinkOnlyNeeded)) {
+        return llvm::make_error<llvm::StringError>(
+            "libdevice link failed", llvm::inconvertibleErrorCode());
+      }
+      break;
+    }
+  }
 
   PTXCode.clear();
   llvm::raw_svector_ostream dest(PTXCode);
