@@ -656,6 +656,8 @@ llvm::Error Interpreter::CreateExecutor() {
     auto JTMB = createJITTargetMachineBuilder(TT);
     if (!JTMB)
       return JTMB.takeError();
+    // set large CodeModel
+    JTMB->setCodeModel(llvm::CodeModel::Large);
     auto JB = IncrementalExecutor::createDefaultJITBuilder(std::move(*JTMB));
     if (!JB)
       return JB.takeError();
