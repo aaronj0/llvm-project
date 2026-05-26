@@ -426,8 +426,11 @@ OrcIncrementalExecutorBuilder::createExecutor(llvm::orc::ThreadSafeContext &TSC,
     auto JTMB = createJITTargetMachineBuilder(TT);
     if (!JTMB)
       return JTMB.takeError();
-    if (CM)
-      JTMB->setCodeModel(CM);
+    // Default to the large code model: JIT'd code refers to host symbols
+    // such as __dso_handle and __cxa_atexit, and once large libraries are
+    // mapped those sit outside the +-2 GB reach of the small model's
+    // 32-bit PC-relative relocations.
+    JTMB->setCodeModel(CM ? CM : std::optional(llvm::CodeModel::Large));
     auto JB = createDefaultJITBuilder(std::move(*JTMB));
     if (!JB)
       return JB.takeError();
