@@ -384,9 +384,18 @@ __host__ __device__ void __nv_tex_surf_handler(const char *name, T *ptr,
 // will continue to fail as it does now.
 #endif // CUDA_VERSION
 #endif // __cplusplus >= 201103L && CUDA_VERSION >= 9000
+// CUDA 13 removed the legacy per-function texture/surface headers (the
+// reference-based API). Guard these includes with __has_include so the wrapper
+// builds against both older toolkits that ship them and CUDA 13+ that does not.
+#if __has_include("surface_indirect_functions.h")
 #include "surface_indirect_functions.h"
+#endif
+#if __has_include("texture_fetch_functions.h")
 #include "texture_fetch_functions.h"
+#endif
+#if __has_include("texture_indirect_functions.h")
 #include "texture_indirect_functions.h"
+#endif
 
 // Restore state of __CUDA_ARCH__ and __THROW we had on entry.
 #pragma pop_macro("__CUDA_ARCH__")
