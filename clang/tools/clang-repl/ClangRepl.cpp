@@ -375,7 +375,9 @@ int main(int argc, const char **argv) {
       if (CudaPath.empty()) {
         ExitOnErr(Interp->LoadDynamicLibrary("libcudart.so"));
       } else {
-        auto CudaRuntimeLibPath = CudaPath + "/lib/libcudart.so";
+        auto CudaRuntimeLibPath = CudaPath + "/lib64/libcudart.so";
+        if (!llvm::sys::fs::exists(CudaRuntimeLibPath))
+          CudaRuntimeLibPath = CudaPath + "/lib/libcudart.so";
         ExitOnErr(Interp->LoadDynamicLibrary(CudaRuntimeLibPath.c_str()));
       }
     }
