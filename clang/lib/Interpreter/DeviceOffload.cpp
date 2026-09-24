@@ -13,14 +13,16 @@
 #include "DeviceOffload.h"
 
 #include "clang/Basic/TargetOptions.h"
+#include "clang/CodeGen/BackendUtil.h"
 #include "clang/CodeGen/ModuleBuilder.h"
+#include "clang/CodeGen/ModuleLinker.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Interpreter/PartialTranslationUnit.h"
 
-#include "llvm/IR/LegacyPassManager.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/IR/Module.h"
-#include "llvm/MC/TargetRegistry.h"
-#include "llvm/Target/TargetMachine.h"
+#include "llvm/Linker/Linker.h"
+#include "llvm/Transforms/IPO/Internalize.h"
 
 namespace clang {
 
@@ -30,7 +32,7 @@ IncrementalCUDADeviceParser::IncrementalCUDADeviceParser(
     llvm::IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> FS,
     llvm::Error &Err, std::list<PartialTranslationUnit> &PTUs)
     : IncrementalParser(DeviceInstance, DeviceAct, Err, PTUs), VFS(FS),
-      CodeGenOpts(HostInstance.getCodeGenOpts()),
+      DeviceCI(DeviceInstance), HostCodeGenOpts(HostInstance.getCodeGenOpts()),
       TargetOpts(DeviceInstance.getTargetOpts()) {
   if (Err)
     return;
@@ -45,30 +47,58 @@ IncrementalCUDADeviceParser::IncrementalCUDADeviceParser(
 
 llvm::Expected<llvm::StringRef> IncrementalCUDADeviceParser::GeneratePTX() {
   auto &PTU = PTUs.back();
-  std::string Error;
 
-  const llvm::Target *Target = llvm::TargetRegistry::lookupTarget(
-      PTU.TheModule->getTargetTriple(), Error);
-  if (!Target)
-    return llvm::make_error<llvm::StringError>(std::move(Error),
-                                               std::error_code());
-  llvm::TargetOptions TO = llvm::TargetOptions();
-  llvm::TargetMachine *TargetMachine = Target->createTargetMachine(
-      PTU.TheModule->getTargetTriple(), TargetOpts.CPU, "", TO,
-      llvm::Reloc::Model::PIC_);
-
-  PTXCode.clear();
-  llvm::raw_svector_ostream dest(PTXCode);
-
-  llvm::legacy::PassManager PM;
-  if (TargetMachine->addPassesToEmitFile(PM, dest, nullptr,
-                                         llvm::CodeGenFileType::AssemblyFile)) {
+  // The driver's device job links the builtin bitcode named by
+  // -mlink-builtin-bitcode (libdevice) and runs the backend on the result.
+  // The incremental flow reached neither. BackendConsumer::LinkInModules
+  // consumes the link modules on the first translation unit, so every later
+  // PTU called undefined __nv_* externs, which the driver's PTX JIT rejects.
+  // Mirror the driver for every PTU.
+  llvm::SmallVector<LinkModule, 4> LinkModules;
+  if (loadLinkModules(DeviceCI, PTU.TheModule->getContext(), LinkModules))
     return llvm::make_error<llvm::StringError>(
-        "NVPTX backend cannot produce PTX code.",
+        "Failed to load the bitcode to link into the device module.",
         llvm::inconvertibleErrorCode());
+  for (LinkModule &LM : LinkModules) {
+    if (LM.PropagateAttrs)
+      for (llvm::Function &F : *LM.Module) {
+        // Skip intrinsics. Keep consistent with how intrinsics are created
+        // in LLVM IR.
+        if (F.isIntrinsic())
+          continue;
+        CodeGen::mergeDefaultFunctionDefinitionAttributes(
+            F, DeviceCI.getCodeGenOpts(), DeviceCI.getLangOpts(),
+            DeviceCI.getTargetOpts(), LM.Internalize);
+      }
+    bool LinkFailed;
+    if (LM.Internalize)
+      LinkFailed = llvm::Linker::linkModules(
+          *PTU.TheModule, std::move(LM.Module), LM.LinkFlags,
+          [](llvm::Module &M, const llvm::StringSet<> &GVS) {
+            llvm::internalizeModule(M, [&GVS](const llvm::GlobalValue &GV) {
+              return !GV.hasName() || (GVS.count(GV.getName()) == 0);
+            });
+          });
+    else
+      LinkFailed = llvm::Linker::linkModules(
+          *PTU.TheModule, std::move(LM.Module), LM.LinkFlags);
+    if (LinkFailed)
+      return llvm::make_error<llvm::StringError>(
+          "Failed to link the bitcode into the device module.",
+          llvm::inconvertibleErrorCode());
   }
 
-  PM.run(*PTU.TheModule);
+  // Emit through the backend path the driver uses, so the device PTU sees the
+  // same pipeline, tuning and verification as a regular device compilation.
+  PTXCode.clear();
+  DiagnosticsEngine &Diags = DeviceCI.getDiagnostics();
+  unsigned NumErrorsBefore = Diags.getNumErrors();
+  emitBackendOutput(DeviceCI, DeviceCI.getCodeGenOpts(), PTU.TheModule.get(),
+                    Backend_EmitAssembly, DeviceCI.getVirtualFileSystemPtr(),
+                    std::make_unique<llvm::raw_svector_ostream>(PTXCode));
+  if (Diags.getNumErrors() > NumErrorsBefore)
+    return llvm::make_error<llvm::StringError>("Failed to emit PTX code.",
+                                               llvm::inconvertibleErrorCode());
 
   PTXCode += '\0';
   while (PTXCode.size() % 8)
@@ -149,7 +179,7 @@ llvm::Error IncrementalCUDADeviceParser::GenerateFatbinary() {
                    llvm::StringRef(FatbinContent.data(), FatbinContent.size()),
                    "", false));
 
-  CodeGenOpts.OffloadBinaryToEmbedFile = std::move(FatbinFileName);
+  HostCodeGenOpts.OffloadBinaryToEmbedFile = std::move(FatbinFileName);
 
   FatbinContent.clear();
 

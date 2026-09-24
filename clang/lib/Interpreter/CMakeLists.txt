@@ -1,5 +1,7 @@
 set(LLVM_LINK_COMPONENTS
    core
+   ipo
+   Linker
    native
    MC
    Option

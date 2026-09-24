@@ -46,7 +46,8 @@ protected:
   llvm::SmallString<1024> PTXCode;
   llvm::SmallVector<char, 1024> FatbinContent;
   llvm::IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> VFS;
-  CodeGenOptions &CodeGenOpts; // Intentionally a reference.
+  CompilerInstance &DeviceCI;
+  CodeGenOptions &HostCodeGenOpts; // Intentionally a reference.
   const TargetOptions &TargetOpts;
 };
 
