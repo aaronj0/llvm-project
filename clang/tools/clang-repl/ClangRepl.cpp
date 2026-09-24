@@ -351,7 +351,11 @@ int main(int argc, const char **argv) {
     if (CudaPath.empty()) {
       ExitOnErr(Interp->LoadDynamicLibrary("libcudart.so"));
     } else {
-      auto CudaRuntimeLibPath = CudaPath + "/lib/libcudart.so";
+      // Linux toolkits ship the runtime in lib64/. Older installs and some
+      // packaged toolkits use lib/.
+      auto CudaRuntimeLibPath = CudaPath + "/lib64/libcudart.so";
+      if (!llvm::sys::fs::exists(CudaRuntimeLibPath))
+        CudaRuntimeLibPath = CudaPath + "/lib/libcudart.so";
       ExitOnErr(Interp->LoadDynamicLibrary(CudaRuntimeLibPath.c_str()));
     }
   } else {
