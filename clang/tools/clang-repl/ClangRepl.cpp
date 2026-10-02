@@ -372,12 +372,21 @@ int main(int argc, const char **argv) {
       return EXIT_FAILURE;
     }
     if (CudaEnabled) {
-      if (CudaPath.empty()) {
-        ExitOnErr(Interp->LoadDynamicLibrary("libcudart.so"));
-      } else {
-        auto CudaRuntimeLibPath = CudaPath + "/lib/libcudart.so";
-        ExitOnErr(Interp->LoadDynamicLibrary(CudaRuntimeLibPath.c_str()));
+      // The toolkit's runtime, in lib64/ or lib/ depending on the layout, else
+      // whatever the library search path provides.
+      std::string CudaRuntimeLib = "libcudart.so";
+      llvm::StringRef CudaSDKPath = CB.getCudaSDKPath();
+      if (!CudaSDKPath.empty()) {
+        for (llvm::StringRef LibDir : {"lib64", "lib"}) {
+          llvm::SmallString<256> Path(CudaSDKPath);
+          llvm::sys::path::append(Path, LibDir, "libcudart.so");
+          if (llvm::sys::fs::exists(Path)) {
+            CudaRuntimeLib = Path.str().str();
+            break;
+          }
+        }
       }
+      ExitOnErr(Interp->LoadDynamicLibrary(CudaRuntimeLib.c_str()));
     }
   } else {
     Interp =

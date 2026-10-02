@@ -26,6 +26,7 @@
 #include "clang/CodeGen/CodeGenAction.h"
 #include "clang/CodeGen/ObjectFilePCHContainerWriter.h"
 #include "clang/Driver/Compilation.h"
+#include "clang/Driver/CudaInstallationDetector.h"
 #include "clang/Driver/Driver.h"
 #include "clang/Driver/Job.h"
 #include "clang/Driver/Tool.h"
@@ -278,6 +279,14 @@ IncrementalCompilerBuilder::create(std::string TT,
     if (auto Err = (*CompilationCB)(*Compilation.get()))
       return std::move(Err);
 
+  if (CudaSDKPath.empty() &&
+      (Compilation->getActiveOffloadKinds() & driver::Action::OFK_Cuda)) {
+    driver::CudaInstallationDetector CudaInstallation(
+        Driver, llvm::Triple(TT), Compilation->getInputArgs());
+    if (CudaInstallation.isValid())
+      CudaSDKPath = CudaInstallation.getInstallPath().str();
+  }
+
   if (Compilation->getArgs().hasArg(options::OPT_v))
     Compilation->getJobs().Print(llvm::errs(), "\n", /*Quote=*/false);
 
@@ -313,7 +322,7 @@ IncrementalCompilerBuilder::createOffload(OffloadType Type, bool device) {
   Argv.push_back(HipEnabled ? "-xhip" : "-xcuda");
   Argv.push_back(device ? "--cuda-device-only" : "--cuda-host-only");
 
-  llvm::StringRef SDKPath = HipEnabled ? RocmSDKPath : CudaSDKPath;
+  const std::string &SDKPath = HipEnabled ? RocmSDKPath : CudaSDKPath;
   std::string SDKPathArg = HipEnabled ? "--rocm-path=" : "--cuda-path=";
   if (!SDKPath.empty()) {
     SDKPathArg += SDKPath;

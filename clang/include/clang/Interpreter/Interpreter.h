@@ -69,15 +69,19 @@ public:
 
   void SetDeviceSDK(OffloadType Type, llvm::StringRef Path) {
     if (Type == OffloadType::HIP)
-      RocmSDKPath = Path;
+      RocmSDKPath = Path.str();
     else
-      CudaSDKPath = Path;
+      CudaSDKPath = Path.str();
   }
 
   // Retained for compatibility with existing CUDA callers.
   void SetCudaSDK(llvm::StringRef Path) {
     SetDeviceSDK(OffloadType::CUDA, Path);
   }
+
+  /// The CUDA toolkit the driver uses: the path given to SetDeviceSDK, else
+  /// the installation detected while creating the first CUDA compiler.
+  llvm::StringRef getCudaSDKPath() const { return CudaSDKPath; }
 
   // Hand over the compilation.
   void SetDriverCompilationCallback(std::function<DriverCompilationFn> C) {
@@ -108,8 +112,8 @@ private:
   std::optional<std::string> TargetTriple;
 
   llvm::StringRef OffloadArch;
-  llvm::StringRef RocmSDKPath;
-  llvm::StringRef CudaSDKPath;
+  std::string RocmSDKPath;
+  std::string CudaSDKPath;
 
   std::string OffloadCUID;
 
