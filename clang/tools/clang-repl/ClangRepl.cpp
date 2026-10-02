@@ -375,7 +375,14 @@ int main(int argc, const char **argv) {
       if (CudaPath.empty()) {
         ExitOnErr(Interp->LoadDynamicLibrary("libcudart.so"));
       } else {
-        auto CudaRuntimeLibPath = CudaPath + "/lib/libcudart.so";
+        // The runtime is in lib64/ or lib/ depending on the toolkit layout.
+        llvm::SmallString<256> CudaRuntimeLibPath;
+        for (llvm::StringRef LibDir : {"lib64", "lib"}) {
+          CudaRuntimeLibPath.assign(CudaPath.getValue());
+          llvm::sys::path::append(CudaRuntimeLibPath, LibDir, "libcudart.so");
+          if (llvm::sys::fs::exists(CudaRuntimeLibPath))
+            break;
+        }
         ExitOnErr(Interp->LoadDynamicLibrary(CudaRuntimeLibPath.c_str()));
       }
     }
