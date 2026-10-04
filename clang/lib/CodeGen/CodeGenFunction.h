@@ -4253,13 +4253,13 @@ private:
           IncExpr(IncExpr), Init(Init), Cond(Cond), NextLB(NextLB),
           NextUB(NextUB) {}
   };
-  void EmitOMPOuterLoop(bool DynamicOrOrdered, bool IsMonotonic,
-                        const OMPLoopDirective &S, OMPPrivateScope &LoopScope,
+  void EmitOMPOuterLoop(bool DynamicOrOrdered, const OMPLoopDirective &S,
+                        OMPPrivateScope &LoopScope,
                         const OMPLoopArguments &LoopArgs,
                         const CodeGenLoopTy &CodeGenLoop,
                         const CodeGenOrderedTy &CodeGenOrdered);
   void EmitOMPForOuterLoop(const OpenMPScheduleTy &ScheduleKind,
-                           bool IsMonotonic, const OMPLoopDirective &S,
+                           const OMPLoopDirective &S,
                            OMPPrivateScope &LoopScope, bool Ordered,
                            const OMPLoopArguments &LoopArgs,
                            const CodeGenDispatchBoundsTy &CGDispatchBounds);
