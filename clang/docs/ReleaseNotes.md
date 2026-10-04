@@ -1126,6 +1126,11 @@ The `alpha.cplusplus.UseAfterLifetimeEnd` checker was renamed to `alpha.core.Use
   modifications to the bindings will not be reflected in the original variable.
   To ensure correct behavior, either use the original variable directly in the
   target region or map the bindings explicitly instead.
+- Fixed a miscompilation of worksharing loops with a `dynamic`, `guided`,
+  `auto` or `runtime` schedule and of `distribute` loops with a chunked
+  `dist_schedule`. Clang marked the iterations of a chunk as independent, and
+  the vectorizer could drop updates when two iterations of a chunk wrote the
+  same memory. (#200032)
 
 ### SYCL Support
 

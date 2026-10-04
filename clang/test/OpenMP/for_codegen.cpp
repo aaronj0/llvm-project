@@ -395,7 +395,7 @@ void dynamic1(float *a, float *b, float *c, float *d) {
 // CHECK-NEXT: store i64 [[CALC_I_2]], ptr [[LC_I:.+]]
 // ... loop body ...
 // End of body: store into a[i]:
-// CHECK: store float [[RESULT:%.+]], ptr {{%.+}}!llvm.access.group
+// CHECK: store float [[RESULT:%.+]], ptr {{%[^,]+}}, align 4{{$}}
     a[i] = b[i] * c[i] * d[i];
 // CHECK: [[IV1_2:%.+]] = load i64, ptr [[OMP_IV]]{{.*}}
 // CHECK-NEXT: [[ADD1_2:%.+]] = add i64 [[IV1_2]], 1
@@ -439,7 +439,7 @@ void guided7(float *a, float *b, float *c, float *d) {
 // CHECK-NEXT: store i64 [[CALC_I_2]], ptr [[LC_I:.+]]
 // ... loop body ...
 // End of body: store into a[i]:
-// CHECK: store float [[RESULT:%.+]], ptr {{%.+}}!llvm.access.group
+// CHECK: store float [[RESULT:%.+]], ptr {{%[^,]+}}, align 4{{$}}
     a[i] = b[i] * c[i] * d[i];
 // CHECK: [[IV1_2:%.+]] = load i64, ptr [[OMP_IV]]{{.*}}
 // CHECK-NEXT: [[ADD1_2:%.+]] = add i64 [[IV1_2]], 1

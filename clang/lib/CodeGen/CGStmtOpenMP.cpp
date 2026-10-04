@@ -3544,7 +3544,7 @@ void CodeGenFunction::EmitOMPUnrollDirective(const OMPUnrollDirective &S) {
 }
 
 void CodeGenFunction::EmitOMPOuterLoop(
-    bool DynamicOrOrdered, bool IsMonotonic, const OMPLoopDirective &S,
+    bool DynamicOrOrdered, const OMPLoopDirective &S,
     CodeGenFunction::OMPPrivateScope &LoopScope,
     const CodeGenFunction::OMPLoopArguments &LoopArgs,
     const CodeGenFunction::CodeGenLoopTy &CodeGenLoop,
@@ -3607,11 +3607,11 @@ void CodeGenFunction::EmitOMPOuterLoop(
   OpenMPDirectiveKind EKind = getEffectiveDirectiveKind(S);
   emitCommonSimdLoop(
       *this, S,
-      [&S, IsMonotonic, EKind](CodeGenFunction &CGF, PrePostActionTy &) {
-        // Generate !llvm.loop.parallel metadata for loads and stores for loops
-        // with dynamic/guided scheduling and without ordered clause.
+      [&S, EKind](CodeGenFunction &CGF, PrePostActionTy &) {
+        // A thread runs the iterations of a chunk in logical order whatever
+        // the schedule, so they may depend on each other. Only
+        // order(concurrent) makes the iterations independent.
         if (!isOpenMPSimdDirective(EKind)) {
-          CGF.LoopStack.setParallel(!IsMonotonic);
           if (const auto *C = S.getSingleClause<OMPOrderClause>())
             if (C->getKind() == OMPC_ORDER_concurrent)
               CGF.LoopStack.setParallel(/*Enable=*/true);
@@ -3661,9 +3661,8 @@ void CodeGenFunction::EmitOMPOuterLoop(
 }
 
 void CodeGenFunction::EmitOMPForOuterLoop(
-    const OpenMPScheduleTy &ScheduleKind, bool IsMonotonic,
-    const OMPLoopDirective &S, OMPPrivateScope &LoopScope, bool Ordered,
-    const OMPLoopArguments &LoopArgs,
+    const OpenMPScheduleTy &ScheduleKind, const OMPLoopDirective &S,
+    OMPPrivateScope &LoopScope, bool Ordered, const OMPLoopArguments &LoopArgs,
     const CodeGenDispatchBoundsTy &CGDispatchBounds) {
   CGOpenMPRuntime &RT = CGM.getOpenMPRuntime();
 
@@ -3765,7 +3764,7 @@ void CodeGenFunction::EmitOMPForOuterLoop(
   OuterLoopArgs.NextLB = S.getNextLowerBound();
   OuterLoopArgs.NextUB = S.getNextUpperBound();
   OuterLoopArgs.DKind = LoopArgs.DKind;
-  EmitOMPOuterLoop(DynamicOrOrdered, IsMonotonic, S, LoopScope, OuterLoopArgs,
+  EmitOMPOuterLoop(DynamicOrOrdered, S, LoopScope, OuterLoopArgs,
                    emitOMPLoopBodyWithStopPoint, CodeGenOrdered);
   if (DynamicOrOrdered) {
     RT.emitForDispatchDeinit(*this, S.getBeginLoc());
@@ -3832,9 +3831,8 @@ void CodeGenFunction::EmitOMPDistributeOuterLoop(
                              : S.getNextUpperBound();
   OuterLoopArgs.DKind = OMPD_distribute;
 
-  EmitOMPOuterLoop(/* DynamicOrOrdered = */ false, /* IsMonotonic = */ false, S,
-                   LoopScope, OuterLoopArgs, CodeGenLoopContent,
-                   emitEmptyOrdered);
+  EmitOMPOuterLoop(/* DynamicOrOrdered = */ false, S, LoopScope, OuterLoopArgs,
+                   CodeGenLoopContent, emitEmptyOrdered);
 }
 
 static std::pair<LValue, LValue>
@@ -4140,13 +4138,6 @@ bool CodeGenFunction::EmitOMPWorksharingLoop(
           canEmitGPUFusedDistSchedule(CGM, S, EKind);
       assert((!ScheduleKind.UseFusedDistChunkSchedule || StaticChunkedOne) &&
              "fused distribute schedule requires a static chunk-one schedule");
-      bool IsMonotonic =
-          Ordered ||
-          (ScheduleKind.Schedule == OMPC_SCHEDULE_static &&
-           !(ScheduleKind.M1 == OMPC_SCHEDULE_MODIFIER_nonmonotonic ||
-             ScheduleKind.M2 == OMPC_SCHEDULE_MODIFIER_nonmonotonic)) ||
-          ScheduleKind.M1 == OMPC_SCHEDULE_MODIFIER_monotonic ||
-          ScheduleKind.M2 == OMPC_SCHEDULE_MODIFIER_monotonic;
       if ((RT.isStaticNonchunked(ScheduleKind.Schedule,
                                  /* Chunked */ Chunk != nullptr) ||
            StaticChunkedOne) &&
@@ -4219,8 +4210,8 @@ bool CodeGenFunction::EmitOMPWorksharingLoop(
                                        ST.getAddress(), IL.getAddress(), Chunk,
                                        EUB);
         LoopArguments.DKind = OMPD_for;
-        EmitOMPForOuterLoop(ScheduleKind, IsMonotonic, S, LoopScope, Ordered,
-                            LoopArguments, CGDispatchBounds);
+        EmitOMPForOuterLoop(ScheduleKind, S, LoopScope, Ordered, LoopArguments,
+                            CGDispatchBounds);
       }
       if (isOpenMPSimdDirective(EKind)) {
         EmitOMPSimdFinal(S, [IL, &S](CodeGenFunction &CGF) {

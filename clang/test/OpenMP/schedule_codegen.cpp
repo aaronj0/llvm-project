@@ -35,7 +35,7 @@ int main() {
 #pragma omp for simd schedule(static, 2)
   for(int i = 0; i < 10; ++i);
 // CHECK: @__kmpc_dispatch_init
-// CHECK: !llvm.access.group
+// CHECK-NOT: !llvm.access.group
 #pragma omp for schedule(auto)
   for(int i = 0; i < 10; ++i);
 // CHECK: @__kmpc_dispatch_init
@@ -43,7 +43,7 @@ int main() {
 #pragma omp for simd schedule(auto)
   for(int i = 0; i < 10; ++i);
 // CHECK: @__kmpc_dispatch_init
-// CHECK: !llvm.access.group
+// CHECK-NOT: !llvm.access.group
 #pragma omp for schedule(runtime)
   for(int i = 0; i < 10; ++i);
 // CHECK: @__kmpc_dispatch_init
@@ -51,7 +51,7 @@ int main() {
 #pragma omp for simd schedule(runtime)
   for(int i = 0; i < 10; ++i);
 // CHECK: @__kmpc_dispatch_init
-// CHECK: !llvm.access.group
+// CHECK-NOT: !llvm.access.group
 #pragma omp for schedule(guided)
   for(int i = 0; i < 10; ++i);
 // CHECK: @__kmpc_dispatch_init
@@ -59,7 +59,7 @@ int main() {
 #pragma omp for simd schedule(guided)
   for(int i = 0; i < 10; ++i);
 // CHECK: @__kmpc_dispatch_init
-// CHECK: !llvm.access.group
+// CHECK-NOT: !llvm.access.group
 #pragma omp for schedule(dynamic)
   for(int i = 0; i < 10; ++i);
 // CHECK: @__kmpc_dispatch_init
@@ -119,7 +119,7 @@ int main() {
 #pragma omp for simd schedule(monotonic: dynamic)
   for(int i = 0; i < 10; ++i);
 // CHECK: @__kmpc_dispatch_init
-// CHECK: !llvm.access.group
+// CHECK-NOT: !llvm.access.group
 #pragma omp for schedule(nonmonotonic: guided)
   for(int i = 0; i < 10; ++i);
 // CHECK: @__kmpc_dispatch_init
@@ -127,7 +127,7 @@ int main() {
 #pragma omp for simd schedule(nonmonotonic: guided)
   for(int i = 0; i < 10; ++i);
 // CHECK: @__kmpc_dispatch_init
-// CHECK: !llvm.access.group
+// CHECK-NOT: !llvm.access.group
 #pragma omp for schedule(nonmonotonic: dynamic)
   for(int i = 0; i < 10; ++i);
 // CHECK: @__kmpc_dispatch_init
@@ -139,7 +139,7 @@ int main() {
 #pragma omp for simd schedule(nonmonotonic: static)
   for(int i = 0; i < 10; ++i);
 // CHECK: call void @__kmpc_dispatch_init_4(ptr {{.+}}, i32 %{{.+}}, i32 1073741862,
-// CHECK: !llvm.access.group
+// CHECK-NOT: !llvm.access.group
 #pragma omp for schedule(nonmonotonic: auto)
   for(int i = 0; i < 10; ++i);
 // CHECK: call void @__kmpc_dispatch_init_4(ptr {{.+}}, i32 %{{.+}}, i32 1073741861,
