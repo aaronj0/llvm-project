@@ -1216,14 +1216,14 @@ void CodeGenModule::Release() {
   if (ObjCRuntime)
     if (llvm::Function *ObjCInitFunction = ObjCRuntime->ModuleInitFunction())
       AddGlobalCtor(ObjCInitFunction);
+  // A static initializer may launch a kernel, so the device binary has to be
+  // registered before any of them run, hence a priority.
   if (Context.getLangOpts().CUDA && CUDARuntime) {
     if (llvm::Function *CudaCtorFunction = CUDARuntime->finalizeModule())
-      AddGlobalCtor(CudaCtorFunction);
+      AddGlobalCtor(CudaCtorFunction, /*Priority=*/101);
   }
   if (LangOpts.SYCLIsHost && !CodeGenOpts.OffloadBinaryToEmbedFile.empty()) {
     if (llvm::Function *SYCLCtorFunction = embedSYCLDeviceBinary())
-      // A static initializer may launch a kernel, so the device binary has to
-      // be registered before any of them run, hence a priority.
       AddGlobalCtor(SYCLCtorFunction, /*Priority=*/101);
   }
   if (OpenMPRuntime) {

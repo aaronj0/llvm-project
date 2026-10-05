@@ -156,7 +156,7 @@ __device__ void device_use() {
 // CUDANORDC: @__[[PREFIX]]_gpubin_handle = internal global ptr null
 // HIPNEF: @__[[PREFIX]]_gpubin_handle_{{[0-9a-f]+}} = internal global ptr null, align 8
 // * Make sure our constructor was added to global ctor list.
-// LNX: @llvm.global_ctors = appending global {{.*}}@__[[PREFIX]]_module_ctor
+// LNX: @llvm.global_ctors = appending global {{.*}}{ i32 101, ptr @__[[PREFIX]]_module_ctor, ptr null }
 
 // Test that we build the correct number of calls to cudaSetupArgument followed
 // by a call to cudaLaunch.
