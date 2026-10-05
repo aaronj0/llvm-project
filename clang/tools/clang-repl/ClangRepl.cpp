@@ -14,6 +14,8 @@
 #include "clang/Basic/DiagnosticFrontend.h"
 #include "clang/Basic/Version.h"
 #include "clang/Config/config.h"
+#include "clang/Driver/Compilation.h"
+#include "clang/Driver/CudaInstallationDetector.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Interpreter/CodeCompletion.h"
 #include "clang/Interpreter/IncrementalExecutor.h"
@@ -311,9 +313,28 @@ int main(int argc, const char **argv) {
   IEB->UseSharedMemory = UseSharedMemory;
 
   std::unique_ptr<clang::CompilerInstance> DeviceCI;
+  // The CUDA toolkit the driver uses: --cuda-path, else the installation the
+  // driver detects while the device compiler is created.
+  std::string CudaSDKPath = CudaPath;
   if (CudaEnabled) {
     if (!CudaPath.empty())
       CB.SetCudaSDK(CudaPath);
+    else
+      CB.SetDriverCompilationCallback(
+          [&](const clang::driver::Compilation &C) -> llvm::Error {
+            if (OrcRuntimePath.empty())
+              if (llvm::Error Err = IEB->UpdateOrcRuntimePathCB(C))
+                return Err;
+            if (CudaSDKPath.empty() &&
+                (C.getActiveOffloadKinds() & clang::driver::Action::OFK_Cuda)) {
+              clang::driver::CudaInstallationDetector CudaInstallation(
+                  C.getDriver(), llvm::Triple(C.getDriver().getTargetTriple()),
+                  C.getInputArgs());
+              if (CudaInstallation.isValid())
+                CudaSDKPath = CudaInstallation.getInstallPath().str();
+            }
+            return llvm::Error::success();
+          });
 
     if (OffloadArch.empty()) {
       OffloadArch = "sm_35";
@@ -348,12 +369,20 @@ int main(int argc, const char **argv) {
     Interp = ExitOnErr(
         clang::Interpreter::createWithCUDA(std::move(CI), std::move(DeviceCI)));
 
-    if (CudaPath.empty()) {
-      ExitOnErr(Interp->LoadDynamicLibrary("libcudart.so"));
-    } else {
-      auto CudaRuntimeLibPath = CudaPath + "/lib/libcudart.so";
-      ExitOnErr(Interp->LoadDynamicLibrary(CudaRuntimeLibPath.c_str()));
+    // The toolkit's runtime, in lib64/ or lib/ depending on the layout, else
+    // whatever the library search path provides.
+    std::string CudaRuntimeLib = "libcudart.so";
+    if (!CudaSDKPath.empty()) {
+      for (llvm::StringRef LibDir : {"lib64", "lib"}) {
+        llvm::SmallString<256> Path(CudaSDKPath);
+        llvm::sys::path::append(Path, LibDir, "libcudart.so");
+        if (llvm::sys::fs::exists(Path)) {
+          CudaRuntimeLib = Path.str().str();
+          break;
+        }
+      }
     }
+    ExitOnErr(Interp->LoadDynamicLibrary(CudaRuntimeLib.c_str()));
   } else {
     Interp =
         ExitOnErr(clang::Interpreter::create(std::move(CI), std::move(IEB)));
