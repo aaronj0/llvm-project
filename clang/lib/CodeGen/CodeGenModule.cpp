@@ -1206,6 +1206,13 @@ void CodeGenModule::Release() {
     GlobalTopLevelStmtBlockInFlight = {nullptr, nullptr};
   }
 
+  // The constructor that registers the device binary goes ahead of the
+  // module's static initializers, as nvcc orders it, so they can launch
+  // kernels.
+  if (Context.getLangOpts().CUDA && CUDARuntime) {
+    if (llvm::Function *CudaCtorFunction = CUDARuntime->finalizeModule())
+      AddGlobalCtor(CudaCtorFunction);
+  }
   // Module implementations are initialized the same way as a regular TU that
   // imports one or more modules.
   if (CXX20ModuleInits && Primary && Primary->isInterfaceOrPartition())
@@ -1218,10 +1225,6 @@ void CodeGenModule::Release() {
   if (ObjCRuntime)
     if (llvm::Function *ObjCInitFunction = ObjCRuntime->ModuleInitFunction())
       AddGlobalCtor(ObjCInitFunction);
-  if (Context.getLangOpts().CUDA && CUDARuntime) {
-    if (llvm::Function *CudaCtorFunction = CUDARuntime->finalizeModule())
-      AddGlobalCtor(CudaCtorFunction);
-  }
   if (LangOpts.SYCLIsHost && !CodeGenOpts.OffloadBinaryToEmbedFile.empty()) {
     if (llvm::Function *SYCLCtorFunction = embedSYCLDeviceBinary())
       // A static initializer may launch a kernel, so the device binary has to
