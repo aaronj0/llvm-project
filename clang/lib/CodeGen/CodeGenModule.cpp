@@ -1208,10 +1208,14 @@ void CodeGenModule::Release() {
 
   // The constructor that registers the device binary goes ahead of the
   // module's static initializers, as nvcc orders it, so they can launch
-  // kernels.
+  // kernels. Under -fincremental-extensions a variable's initializer is
+  // already in the list by now, so insert at the front with lexical order 0
+  // rather than append; the stable sort by lexical order keeps it first.
   if (Context.getLangOpts().CUDA && CUDARuntime) {
     if (llvm::Function *CudaCtorFunction = CUDARuntime->finalizeModule())
-      AddGlobalCtor(CudaCtorFunction);
+      GlobalCtors.insert(GlobalCtors.begin(),
+                         Structor(/*Priority=*/65535, /*LexOrder=*/0,
+                                  CudaCtorFunction, /*AssociatedData=*/nullptr));
   }
   // Module implementations are initialized the same way as a regular TU that
   // imports one or more modules.
