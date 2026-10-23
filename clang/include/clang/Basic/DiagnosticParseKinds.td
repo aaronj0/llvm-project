@@ -1093,6 +1093,8 @@ def warn_pragma_missing_argument : Warning<
   "missing argument to '#pragma %0'%select{|; expected %2}1">, InGroup<IgnoredPragmas>;
 def warn_pragma_invalid_argument : Warning<
   "unexpected argument '%0' to '#pragma %1'%select{|; expected %3}2">, InGroup<IgnoredPragmas>;
+def warn_pragma_repl_optimize_failed : Warning<
+  "'#pragma clang repl optimize' failed: %0">, InGroup<IgnoredPragmas>;
 
 def err_pragma_misplaced_in_decl : Error<"this pragma cannot appear in %0 declaration">;
 

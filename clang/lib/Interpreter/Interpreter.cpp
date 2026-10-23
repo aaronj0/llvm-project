@@ -49,7 +49,6 @@
 #include "clang/Serialization/ModuleCache.h"
 #include "clang/Serialization/ObjectFilePCHContainerReader.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/ADT/StringSwitch.h"
 #include "llvm/ExecutionEngine/JITSymbol.h"
 #include "llvm/ExecutionEngine/Orc/EPCDynamicLibrarySearchGenerator.h"
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
@@ -235,6 +234,32 @@ static llvm::Error ExecuteIncrementalAction(CompilerInstance &CI,
   return llvm::Error::success();
 }
 
+// The -O flags the repl pragma and setOptLevel accept, with the
+// OptimizationLevel and OptimizeSize cc1 reads from each.
+struct OptFlag {
+  llvm::StringLiteral Name;
+  unsigned Level;
+  unsigned Size;
+};
+constexpr OptFlag OptFlags[] = {{"O0", 0, 0}, {"O1", 1, 0}, {"O2", 2, 0},
+                                {"O3", 3, 0}, {"Os", 2, 1}, {"Oz", 2, 2}};
+
+static const OptFlag *findOptFlag(llvm::StringRef Name) {
+  for (const OptFlag &F : OptFlags)
+    if (F.Name == Name)
+      return &F;
+  return nullptr;
+}
+
+static llvm::Expected<const OptFlag &> optFlagForLevel(unsigned Level,
+                                                       unsigned Size) {
+  for (const OptFlag &F : OptFlags)
+    if (F.Level == Level && F.Size == Size)
+      return F;
+  return llvm::createStringError(
+      "no -O flag sets optimization level %u with size %u", Level, Size);
+}
+
 // '#pragma clang repl optimize(<opt>)' sets the optimization level and size
 // used to emit modules for input parsed after the pragma. <opt> is an -O flag
 // spelled without the leading dash: O0, O1, O2, O3, Os or Oz.
@@ -264,17 +289,8 @@ struct PragmaReplHandler : public PragmaHandler {
 
     PP.LexUnexpandedToken(Tok);
     std::string Opt = PP.getSpelling(Tok);
-    // The OptimizationLevel and OptimizeSize that each -O flag sets.
-    std::optional<std::pair<unsigned, unsigned>> Level =
-        llvm::StringSwitch<std::optional<std::pair<unsigned, unsigned>>>(Opt)
-            .Case("O0", std::pair(0U, 0U))
-            .Case("O1", std::pair(1U, 0U))
-            .Case("O2", std::pair(2U, 0U))
-            .Case("O3", std::pair(3U, 0U))
-            .Case("Os", std::pair(2U, 1U))
-            .Case("Oz", std::pair(2U, 2U))
-            .Default(std::nullopt);
-    if (!Level) {
+    const OptFlag *Flag = findOptFlag(Opt);
+    if (!Flag) {
       PP.Diag(Tok.getLocation(), diag::warn_pragma_invalid_argument)
           << Opt << "clang repl optimize" << /*Expected=*/true
           << "'O0', 'O1', 'O2', 'O3', 'Os' or 'Oz'";
@@ -295,7 +311,9 @@ struct PragmaReplHandler : public PragmaHandler {
       return;
     }
 
-    Interp.setOptLevel(Level->first, Level->second);
+    if (llvm::Error Err = Interp.setOptLevel(Flag->Level, Flag->Size))
+      PP.Diag(Introducer.Loc, diag::warn_pragma_repl_optimize_failed)
+          << llvm::toString(std::move(Err));
   }
 };
 
@@ -439,6 +457,7 @@ Interpreter::Interpreter(std::unique_ptr<CompilerInstance> Instance,
                          std::unique_ptr<clang::ASTConsumer> Consumer)
     : IncrExecutorBuilder(std::move(IEB)) {
   CI = std::move(Instance);
+  InitialCodeGenOpts = std::make_unique<CodeGenOptions>(CI->getCodeGenOpts());
   llvm::ErrorAsOutParameter EAO(&ErrOut);
   auto LLVMCtx = std::make_unique<llvm::LLVMContext>();
   TSCtx = std::make_unique<llvm::orc::ThreadSafeContext>(std::move(LLVMCtx));
@@ -645,12 +664,48 @@ llvm::Expected<IncrementalExecutor &> Interpreter::getExecutionEngine() {
   return *IncrExecutor.get();
 }
 
-void Interpreter::setOptLevel(unsigned OptLevel, unsigned OptSize) {
-  CodeGenOptions &CGO = getCompilerInstance()->getCodeGenOpts();
-  CGO.OptimizationLevel = OptLevel;
-  CGO.OptimizeSize = OptSize;
-  CGO.setInlining(OptLevel ? CodeGenOptions::NormalInlining
-                           : CodeGenOptions::OnlyAlwaysInlining);
+// The CodeGenOptions a fresh session of this target gets from Flag.
+static llvm::Expected<CodeGenOptions>
+optFlagCodeGenOpts(const CompilerInstance &CI, const OptFlag &Flag) {
+  std::string Arg = ("-" + Flag.Name).str();
+  IncrementalCompilerBuilder CB;
+  CB.SetTargetTriple(CI.getTargetOpts().Triple);
+  CB.SetCompilerArgs({Arg.c_str()});
+  auto Scratch = CB.CreateCpp();
+  if (!Scratch)
+    return Scratch.takeError();
+  // Only a frontend action takes over the remapped input buffer, and none
+  // runs here.
+  for (const auto &RB : (*Scratch)->getPreprocessorOpts().RemappedFileBuffers)
+    delete RB.second;
+  return (*Scratch)->getCodeGenOpts();
+}
+
+llvm::Error Interpreter::setOptLevel(unsigned OptLevel, unsigned OptSize) {
+  auto To = optFlagForLevel(OptLevel, OptSize);
+  if (!To)
+    return To.takeError();
+  const CodeGenOptions &Initial = *InitialCodeGenOpts;
+  auto From = optFlagForLevel(Initial.OptimizationLevel, Initial.OptimizeSize);
+  if (!From)
+    return From.takeError();
+  auto FromOpts = optFlagCodeGenOpts(*CI, *From);
+  if (!FromOpts)
+    return FromOpts.takeError();
+  auto ToOpts = optFlagCodeGenOpts(*CI, *To);
+  if (!ToOpts)
+    return ToOpts.takeError();
+  // An option that started at the default of the startup flag follows the
+  // level. One the startup arguments set keeps its value.
+  CodeGenOptions &CGO = CI->getCodeGenOpts();
+#define CODEGENOPT(Name, Bits, Default, Compatibility)                         \
+  if (Initial.Name == FromOpts->Name)                                          \
+    CGO.Name = ToOpts->Name;
+#define ENUM_CODEGENOPT(Name, Type, Bits, Default, Compatibility)              \
+  if (Initial.get##Name() == FromOpts->get##Name())                            \
+    CGO.set##Name(ToOpts->get##Name());
+#include "clang/Basic/CodeGenOptions.def"
+  return llvm::Error::success();
 }
 
 ASTContext &Interpreter::getASTContext() {

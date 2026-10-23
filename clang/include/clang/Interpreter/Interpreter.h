@@ -40,6 +40,7 @@ namespace driver {
 class Compilation;
 } // namespace driver
 
+class CodeGenOptions;
 class CompilerInstance;
 class CXXRecordDecl;
 class Decl;
@@ -133,6 +134,10 @@ class Interpreter {
   /// Compiler instance performing the incremental compilation.
   std::unique_ptr<CompilerInstance> CI;
 
+  /// The CodeGenOptions CI was created with. setOptLevel moves only the
+  /// options that started at the default of the startup -O flag.
+  std::unique_ptr<CodeGenOptions> InitialCodeGenOpts;
+
   /// An optional compiler instance for CUDA offloading
   std::unique_ptr<CompilerInstance> DeviceCI;
 
@@ -172,8 +177,9 @@ public:
 
   /// Set the optimization level and size used to emit subsequently parsed
   /// input. \p OptSize mirrors \c CodeGenOptions::OptimizeSize (1 for -Os,
-  /// 2 for -Oz).
-  void setOptLevel(unsigned OptLevel, unsigned OptSize = 0);
+  /// 2 for -Oz). The other CodeGenOptions the -O flag decides follow the
+  /// level. Returns an error for a level and size no -O flag sets.
+  llvm::Error setOptLevel(unsigned OptLevel, unsigned OptSize = 0);
 
   /// Undo N previous incremental inputs.
   llvm::Error Undo(unsigned N = 1);

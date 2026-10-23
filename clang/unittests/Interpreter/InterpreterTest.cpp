@@ -25,6 +25,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/TargetParser/Host.h"
+#include "llvm/Testing/Support/Error.h"
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -586,7 +587,7 @@ TEST_F(InterpreterTest, SetOptLevel) {
   EXPECT_TRUE(F0->hasFnAttribute(llvm::Attribute::OptimizeNone));
 
   // A change only takes effect on the next parsed module.
-  Interp->setOptLevel(2);
+  cantFail(Interp->setOptLevel(2));
 
   auto &PTU1 = cantFail(Interp->Parse("extern \"C\" int f1() { return 1; }"));
   llvm::Function *F1 = PTU1.TheModule->getFunction("f1");
@@ -595,7 +596,7 @@ TEST_F(InterpreterTest, SetOptLevel) {
   EXPECT_FALSE(F1->hasFnAttribute(llvm::Attribute::NoInline));
 
   // -Oz is level 2, size 2.
-  Interp->setOptLevel(2, 2);
+  cantFail(Interp->setOptLevel(2, 2));
 
   auto &PTU2 = cantFail(Interp->Parse("extern \"C\" int f2() { return 2; }"));
   llvm::Function *F2 = PTU2.TheModule->getFunction("f2");
@@ -649,6 +650,91 @@ TEST_F(InterpreterTest, PragmaOptimizeLevel) {
                                       "extern \"C\" int f7() { return 7; }\n"
                                       "#pragma clang repl optimize(O2)\n"));
   EXPECT_TRUE(HasAttr(PTU6, "f6", llvm::Attribute::OptimizeNone));
+}
+
+TEST_F(InterpreterTest, SetOptLevelMatchesOptFlag) {
+  std::unique_ptr<Interpreter> Interp = createInterpreter();
+
+  // Each level, every option, compared with an interpreter created with the
+  // -O flag.
+  struct {
+    const char *Flag;
+    unsigned Level, Size;
+  } Levels[] = {{"-O2", 2, 0}, {"-O3", 3, 0}, {"-Os", 2, 1},
+                {"-Oz", 2, 2}, {"-O1", 1, 0}, {"-O0", 0, 0}};
+  for (const auto &L : Levels) {
+    cantFail(Interp->setOptLevel(L.Level, L.Size));
+    std::unique_ptr<Interpreter> Ref = createInterpreter({L.Flag});
+    const CodeGenOptions &Got = Interp->getCompilerInstance()->getCodeGenOpts();
+    const CodeGenOptions &Want = Ref->getCompilerInstance()->getCodeGenOpts();
+#define CODEGENOPT(Name, Bits, Default, Compatibility)                         \
+  EXPECT_EQ(Got.Name, Want.Name) << #Name << " at " << L.Flag;
+#define ENUM_CODEGENOPT(Name, Type, Bits, Default, Compatibility)              \
+  EXPECT_EQ(Got.get##Name(), Want.get##Name()) << #Name << " at " << L.Flag;
+#include "clang/Basic/CodeGenOptions.def"
+  }
+}
+
+TEST_F(InterpreterTest, SetOptLevelKeepsExplicitOptions) {
+  // -fno-vectorize is the session's choice, the unroller follows the level.
+  std::unique_ptr<Interpreter> Interp =
+      createInterpreter({"-O2", "-fno-vectorize"});
+  const CodeGenOptions &CGO = Interp->getCompilerInstance()->getCodeGenOpts();
+  EXPECT_FALSE(CGO.VectorizeLoop);
+  EXPECT_TRUE(CGO.VectorizeSLP);
+  EXPECT_TRUE(CGO.UnrollLoops);
+
+  cantFail(Interp->setOptLevel(3));
+  EXPECT_EQ(CGO.OptimizationLevel, 3u);
+  EXPECT_FALSE(CGO.VectorizeLoop);
+  EXPECT_TRUE(CGO.VectorizeSLP);
+  EXPECT_TRUE(CGO.UnrollLoops);
+
+  cantFail(Interp->setOptLevel(0));
+  EXPECT_FALSE(CGO.VectorizeLoop);
+  EXPECT_FALSE(CGO.VectorizeSLP);
+  EXPECT_FALSE(CGO.UnrollLoops);
+
+  // Back at -O2 the session's choice still holds.
+  cantFail(Interp->setOptLevel(2));
+  EXPECT_FALSE(CGO.VectorizeLoop);
+  EXPECT_TRUE(CGO.VectorizeSLP);
+  EXPECT_TRUE(CGO.UnrollLoops);
+}
+
+TEST_F(InterpreterTest, SetOptLevelRejectsUnknownPair) {
+  // No -O flag sets level 3 with size 1: an error, the options stay.
+  std::unique_ptr<Interpreter> Interp = createInterpreter({"-O2"});
+  const CodeGenOptions &CGO = Interp->getCompilerInstance()->getCodeGenOpts();
+  EXPECT_THAT_ERROR(Interp->setOptLevel(3, 1),
+                    llvm::FailedWithMessage(
+                        "no -O flag sets optimization level 3 with size 1"));
+  EXPECT_EQ(CGO.OptimizationLevel, 2u);
+  EXPECT_EQ(CGO.OptimizeSize, 0u);
+}
+
+TEST_F(InterpreterTest, PragmaOptimizeLevelWarnsOnFailure) {
+  // A session created at a level and size no -O flag sets has no defaults
+  // to take. The pragma warns and its input still compiles.
+  IncrementalCompilerBuilder CB;
+  CB.SetCompilerArgs({"-Xclang", "-emit-llvm-only"});
+  std::unique_ptr<CompilerInstance> CI = cantFail(CB.CreateCpp());
+  CI->getCodeGenOpts().OptimizationLevel = 3;
+  CI->getCodeGenOpts().OptimizeSize = 1;
+  std::unique_ptr<Interpreter> Interp =
+      cantFail(Interpreter::create(std::move(CI)));
+  EXPECT_THAT_ERROR(Interp->setOptLevel(2),
+                    llvm::FailedWithMessage(
+                        "no -O flag sets optimization level 3 with size 1"));
+
+  DiagnosticsEngine &Diags = Interp->getCompilerInstance()->getDiagnostics();
+  unsigned Warnings = Diags.getNumWarnings();
+  cantFail(Interp->Parse("#pragma clang repl optimize(O2)\n"
+                         "extern \"C\" int f0() { return 0; }"));
+  EXPECT_EQ(Diags.getNumWarnings(), Warnings + 1);
+  EXPECT_EQ(Interp->getCompilerInstance()->getCodeGenOpts().OptimizationLevel,
+            3u);
+  cantFail(Interp->Parse("extern \"C\" int f1() { return f0(); }"));
 }
 
 TEST_F(InterpreterTest, TranslationUnit_CanonicalDecl) {
