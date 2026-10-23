@@ -645,12 +645,57 @@ llvm::Expected<IncrementalExecutor &> Interpreter::getExecutionEngine() {
   return *IncrExecutor.get();
 }
 
+// The CodeGenOptions a fresh session of this target gets from the -O flag
+// behind this level and size.
+static llvm::Expected<CodeGenOptions>
+optLevelCodeGenOpts(const CompilerInstance &CI, unsigned OptLevel,
+                    unsigned OptSize) {
+  std::string Flag = OptSize == 1   ? "-Os"
+                     : OptSize == 2 ? "-Oz"
+                                    : "-O" + std::to_string(OptLevel);
+  IncrementalCompilerBuilder CB;
+  CB.SetTargetTriple(CI.getTargetOpts().Triple);
+  CB.SetCompilerArgs({Flag.c_str()});
+  auto Scratch = CB.CreateCpp();
+  if (!Scratch)
+    return Scratch.takeError();
+  // Only a frontend action takes over the remapped input buffer, and none
+  // runs here.
+  for (const auto &RB : (*Scratch)->getPreprocessorOpts().RemappedFileBuffers)
+    delete RB.second;
+  return (*Scratch)->getCodeGenOpts();
+}
+
+// Move every option at the old level's default to the new level's, as the
+// driver and cc1 derive them. An option the session set differs from the old
+// default and keeps its value.
+static llvm::Error applyOptLevel(CompilerInstance &CI, unsigned OptLevel,
+                                 unsigned OptSize) {
+  CodeGenOptions &CGO = CI.getCodeGenOpts();
+  auto Old = optLevelCodeGenOpts(CI, CGO.OptimizationLevel, CGO.OptimizeSize);
+  if (!Old)
+    return Old.takeError();
+  auto New = optLevelCodeGenOpts(CI, OptLevel, OptSize);
+  if (!New)
+    return New.takeError();
+#define CODEGENOPT(Name, Bits, Default, Compatibility)                         \
+  if (CGO.Name == Old->Name)                                                   \
+    CGO.Name = New->Name;
+#define ENUM_CODEGENOPT(Name, Type, Bits, Default, Compatibility)              \
+  if (CGO.get##Name() == Old->get##Name())                                     \
+    CGO.set##Name(New->get##Name());
+#include "clang/Basic/CodeGenOptions.def"
+  return llvm::Error::success();
+}
+
 void Interpreter::setOptLevel(unsigned OptLevel, unsigned OptSize) {
-  CodeGenOptions &CGO = getCompilerInstance()->getCodeGenOpts();
-  CGO.OptimizationLevel = OptLevel;
-  CGO.OptimizeSize = OptSize;
-  CGO.setInlining(OptLevel ? CodeGenOptions::NormalInlining
-                           : CodeGenOptions::OnlyAlwaysInlining);
+  CompilerInstance &CI = *getCompilerInstance();
+  if (llvm::Error Err = applyOptLevel(CI, OptLevel, OptSize)) {
+    DiagnosticsEngine &Diags = CI.getDiagnostics();
+    Diags.Report(Diags.getCustomDiagID(
+        DiagnosticsEngine::Error, "cannot apply the optimization level: %0"))
+        << llvm::toString(std::move(Err));
+  }
 }
 
 ASTContext &Interpreter::getASTContext() {

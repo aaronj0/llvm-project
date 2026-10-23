@@ -651,6 +651,50 @@ TEST_F(InterpreterTest, PragmaOptimizeLevel) {
   EXPECT_TRUE(HasAttr(PTU6, "f6", llvm::Attribute::OptimizeNone));
 }
 
+TEST_F(InterpreterTest, SetOptLevelMatchesOptFlag) {
+  std::unique_ptr<Interpreter> Interp = createInterpreter();
+
+  // Each level, every option, compared with an interpreter created with the
+  // -O flag.
+  struct {
+    const char *Flag;
+    unsigned Level, Size;
+  } Levels[] = {{"-O2", 2, 0}, {"-O3", 3, 0}, {"-Os", 2, 1},
+                {"-Oz", 2, 2}, {"-O1", 1, 0}, {"-O0", 0, 0}};
+  for (const auto &L : Levels) {
+    Interp->setOptLevel(L.Level, L.Size);
+    std::unique_ptr<Interpreter> Ref = createInterpreter({L.Flag});
+    const CodeGenOptions &Got = Interp->getCompilerInstance()->getCodeGenOpts();
+    const CodeGenOptions &Want = Ref->getCompilerInstance()->getCodeGenOpts();
+#define CODEGENOPT(Name, Bits, Default, Compatibility)                         \
+  EXPECT_EQ(Got.Name, Want.Name) << #Name << " at " << L.Flag;
+#define ENUM_CODEGENOPT(Name, Type, Bits, Default, Compatibility)              \
+  EXPECT_EQ(Got.get##Name(), Want.get##Name()) << #Name << " at " << L.Flag;
+#include "clang/Basic/CodeGenOptions.def"
+  }
+}
+
+TEST_F(InterpreterTest, SetOptLevelKeepsExplicitOptions) {
+  // -fno-vectorize is the session's choice, the unroller follows the level.
+  std::unique_ptr<Interpreter> Interp =
+      createInterpreter({"-O2", "-fno-vectorize"});
+  const CodeGenOptions &CGO = Interp->getCompilerInstance()->getCodeGenOpts();
+  EXPECT_FALSE(CGO.VectorizeLoop);
+  EXPECT_TRUE(CGO.VectorizeSLP);
+  EXPECT_TRUE(CGO.UnrollLoops);
+
+  Interp->setOptLevel(3);
+  EXPECT_EQ(CGO.OptimizationLevel, 3u);
+  EXPECT_FALSE(CGO.VectorizeLoop);
+  EXPECT_TRUE(CGO.VectorizeSLP);
+  EXPECT_TRUE(CGO.UnrollLoops);
+
+  Interp->setOptLevel(0);
+  EXPECT_FALSE(CGO.VectorizeLoop);
+  EXPECT_FALSE(CGO.VectorizeSLP);
+  EXPECT_FALSE(CGO.UnrollLoops);
+}
+
 TEST_F(InterpreterTest, TranslationUnit_CanonicalDecl) {
   std::vector<const char *> Args;
   std::unique_ptr<Interpreter> Interp = createInterpreter(Args);
