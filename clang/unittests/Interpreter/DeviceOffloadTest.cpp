@@ -14,6 +14,9 @@
 
 #include "InterpreterTestFixture.h"
 
+#include "clang/AST/ASTContext.h"
+#include "clang/AST/Decl.h"
+#include "clang/AST/Expr.h"
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Interpreter/Interpreter.h"
@@ -102,6 +105,30 @@ TEST_F(DeviceOffloadTest, FirstDeviceModuleVerifies) {
 #else
   GTEST_SKIP() << "no death tests on this platform";
 #endif
+}
+
+TEST_F(DeviceOffloadTest, DeviceExpressionIsNotValuePrinted) {
+  IncrementalCompilerBuilder CB;
+  CB.SetCompilerArgs({"-nocudainc", "-nocudalib"});
+  auto DeviceCI = CB.CreateDevice(OffloadType::CUDA);
+  ASSERT_THAT_EXPECTED(DeviceCI, llvm::Succeeded());
+  auto HostCI = CB.CreateHost(OffloadType::CUDA);
+  ASSERT_THAT_EXPECTED(HostCI, llvm::Succeeded());
+  const CompilerInstance *DevCI = DeviceCI->get();
+  auto Interp = Interpreter::createWithDevice(
+      std::move(*HostCI), std::move(*DeviceCI), OffloadType::CUDA);
+  ASSERT_THAT_EXPECTED(Interp, llvm::Succeeded());
+
+  // The host turns the expression into the value-printing call. The device
+  // keeps it.
+  auto PTU = (*Interp)->Parse("1 + 1");
+  ASSERT_THAT_EXPECTED(PTU, llvm::Succeeded());
+  const TopLevelStmtDecl *TLSD = nullptr;
+  for (const Decl *D : DevCI->getASTContext().getTranslationUnitDecl()->decls())
+    if (const auto *S = dyn_cast<TopLevelStmtDecl>(D))
+      TLSD = S;
+  ASSERT_TRUE(TLSD);
+  EXPECT_TRUE(isa<BinaryOperator>(TLSD->getStmt()));
 }
 
 TEST_F(DeviceOffloadTest, EmptyDeviceModule) {

@@ -69,6 +69,10 @@ IncrementalAction::CreateASTConsumer(CompilerInstance & /*CI*/,
     return std::make_unique<MultiplexConsumer>(std::move(Cs));
   }
 
+  // Value printing belongs to the host compilation.
+  if (CI.getLangOpts().CUDAIsDevice)
+    return C;
+
   return std::make_unique<InProcessPrintingASTConsumer>(std::move(C), Interp);
 }
 
