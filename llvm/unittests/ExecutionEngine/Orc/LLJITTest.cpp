@@ -151,4 +151,29 @@ TEST_F(LLJITTest, DeinitializeAfterFailedInitializer) {
   EXPECT_THAT_EXPECTED(readInt("ran"), HasValue(1));
 }
 
+TEST_F(LLJITTest, InitializeAfterRemovedModule) {
+  auto &JD = J->getMainJITDylib();
+
+  // Materialize the module through a lookup, so that its init function is
+  // registered, then remove it before initialize runs.
+  const char *FooAndCtor = R"(
+    define i32 @foo() {
+      ret i32 1
+    }
+    define internal void @ctor() {
+      ret void
+    }
+    @llvm.global_ctors = appending global [1 x { i32, ptr, ptr }]
+        [{ i32, ptr, ptr } { i32 65535, ptr @ctor, ptr null }]
+  )";
+  auto RT = JD.createResourceTracker();
+  cantFail(J->addIRModule(RT, parseModule(FooAndCtor, "A")));
+  EXPECT_THAT_EXPECTED(J->lookup("foo"), Succeeded());
+  EXPECT_THAT_ERROR(RT->remove(), Succeeded());
+
+  cantFail(J->addIRModule(parseModule(CtorSetsRan, "B")));
+  EXPECT_THAT_ERROR(J->initialize(JD), Succeeded());
+  EXPECT_THAT_EXPECTED(readInt("ran"), HasValue(1));
+}
+
 } // end anonymous namespace

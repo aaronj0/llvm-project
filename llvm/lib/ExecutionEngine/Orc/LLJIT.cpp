@@ -222,9 +222,11 @@ public:
         if ((*KV.first).starts_with(InitFunctionPrefix)) {
           InitSymbols[&JD].add(KV.first,
                                SymbolLookupFlags::WeaklyReferencedSymbol);
-          InitFunctions[&JD].add(KV.first);
+          InitFunctions[&JD].add(KV.first,
+                                 SymbolLookupFlags::WeaklyReferencedSymbol);
         } else if ((*KV.first).starts_with(DeInitFunctionPrefix)) {
-          DeInitFunctions[&JD].add(KV.first);
+          DeInitFunctions[&JD].add(KV.first,
+                                   SymbolLookupFlags::WeaklyReferencedSymbol);
         }
     }
     return Error::success();
@@ -294,14 +296,22 @@ public:
     return Error::success();
   }
 
+  // Init and deinit functions are looked up as weakly referenced symbols: a
+  // module whose tracker was removed before initialize or deinitialize ran
+  // has no function left to run, and must be skipped rather than fail the
+  // lookup.
   void registerInitFunc(JITDylib &JD, SymbolStringPtr InitName) {
-    getExecutionSession().runSessionLocked(
-        [&]() { InitFunctions[&JD].add(InitName); });
+    getExecutionSession().runSessionLocked([&]() {
+      InitFunctions[&JD].add(InitName,
+                             SymbolLookupFlags::WeaklyReferencedSymbol);
+    });
   }
 
   void registerDeInitFunc(JITDylib &JD, SymbolStringPtr DeInitName) {
-    getExecutionSession().runSessionLocked(
-        [&]() { DeInitFunctions[&JD].add(DeInitName); });
+    getExecutionSession().runSessionLocked([&]() {
+      DeInitFunctions[&JD].add(DeInitName,
+                               SymbolLookupFlags::WeaklyReferencedSymbol);
+    });
   }
 
 private:
