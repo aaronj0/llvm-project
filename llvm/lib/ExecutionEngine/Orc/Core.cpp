@@ -3196,6 +3196,10 @@ void ExecutionSession::OL_notifyFailed(MaterializationResponsibility &MR) {
   if (MR.SymbolFlags.empty())
     return;
 
+  if (auto *P = getPlatform())
+    if (auto Err = P->notifyFailed(MR))
+      reportError(std::move(Err));
+
   SymbolNameVector SymbolsToFail;
   for (auto &[Name, Flags] : MR.SymbolFlags)
     SymbolsToFail.push_back(Name);

@@ -101,6 +101,7 @@ public:
     // Noop -- Nothing to do (yet).
     return Error::success();
   }
+  Error notifyFailed(MaterializationResponsibility &MR) override;
 
 private:
   GenericLLVMIRPlatformSupport &S;
@@ -226,6 +227,28 @@ public:
           DeInitFunctions[&JD].add(KV.first);
         }
     }
+    return Error::success();
+  }
+
+  // Drop the init and deinit symbols of a module that failed to materialize.
+  // They can never resolve, and the next initialize or deinitialize would
+  // fail on them.
+  Error notifyFailed(MaterializationResponsibility &MR) {
+    auto &JD = MR.getTargetJITDylib();
+    auto &FailedSymbols = MR.getSymbols();
+    getExecutionSession().runSessionLocked([&]() {
+      for (auto *Map : {&InitSymbols, &InitFunctions, &DeInitFunctions}) {
+        auto I = Map->find(&JD);
+        if (I == Map->end())
+          continue;
+        I->second.remove_if(
+            [&](const SymbolStringPtr &Name, SymbolLookupFlags) {
+              return FailedSymbols.count(Name);
+            });
+        if (I->second.empty())
+          Map->erase(I);
+      }
+    });
     return Error::success();
   }
 
@@ -505,6 +528,10 @@ Error GenericLLVMIRPlatform::teardownJITDylib(JITDylib &JD) {
 Error GenericLLVMIRPlatform::notifyAdding(ResourceTracker &RT,
                                           const MaterializationUnit &MU) {
   return S.notifyAdding(RT, MU);
+}
+
+Error GenericLLVMIRPlatform::notifyFailed(MaterializationResponsibility &MR) {
+  return S.notifyFailed(MR);
 }
 
 Expected<ThreadSafeModule>
