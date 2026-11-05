@@ -1123,6 +1123,34 @@ TEST_F(CoreAPIsStandardTest, DefineMaterializingSymbol) {
       << "Expected Bar == BarSym";
 }
 
+TEST_F(CoreAPIsStandardTest,
+       RemoveTrackerWithSymbolsDefinedWhileMaterializing) {
+  // Symbols that a materializer defines through defineMaterializing belong to
+  // the same tracker as the ones its unit declared up front, and must go when
+  // that tracker is removed.
+  auto RT = JD.createResourceTracker();
+  cantFail(JD.define(std::make_unique<SimpleMaterializationUnit>(
+                         SymbolFlagsMap({{Foo, FooSym.getFlags()}}),
+                         [&](std::unique_ptr<MaterializationResponsibility> R) {
+                           cantFail(R->defineMaterializing(
+                               SymbolFlagsMap({{Bar, BarSym.getFlags()}})));
+                           cantFail(R->notifyResolved(
+                               SymbolMap({{Foo, FooSym}, {Bar, BarSym}})));
+                           cantFail(R->notifyEmitted({}));
+                         }),
+                     RT));
+
+  cantFail(ES.lookup(makeJITDylibSearchOrder(&JD), Foo));
+  cantFail(ES.lookup(makeJITDylibSearchOrder(&JD), Bar));
+
+  cantFail(RT->remove());
+
+  EXPECT_THAT_EXPECTED(ES.lookup(makeJITDylibSearchOrder(&JD), Foo), Failed())
+      << "Foo should have been removed with its tracker";
+  EXPECT_THAT_EXPECTED(ES.lookup(makeJITDylibSearchOrder(&JD), Bar), Failed())
+      << "Bar should have been removed with its tracker";
+}
+
 TEST_F(CoreAPIsStandardTest, GeneratorTest) {
   ExecutorSymbolDef BazHiddenSym(BazSym.getAddress(),
                                  BazSym.getFlags() & ~JITSymbolFlags::Exported);

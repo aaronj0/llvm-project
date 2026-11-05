@@ -739,6 +739,15 @@ JITDylib::defineMaterializing(MaterializationResponsibility &FromMR,
       RejectedWeakDefs.pop_back();
     }
 
+    // The new symbols belong to the responsibility's tracker, like the ones
+    // its MaterializationUnit declared up front.
+    if (FromMR.RT.get() != DefaultTracker.get()) {
+      auto &TS = TrackerSymbols[FromMR.RT.get()];
+      TS.reserve(TS.size() + AddedSyms.size());
+      for (auto &S : AddedSyms)
+        TS.push_back(SymbolStringPtr(S));
+    }
+
     return SymbolFlags;
   });
 }
